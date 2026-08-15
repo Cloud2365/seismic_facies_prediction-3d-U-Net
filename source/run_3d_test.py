@@ -142,7 +142,8 @@ def main():
     # Создаём объект для вычисления метрик
     eval_metric_config = {
         'name': 'SegmentationMetrics',
-        'n_classes': args.n_classes
+        'n_classes': args.n_classes,
+        'ignore_background': True
     }
     eval_criterion = get_evaluation_metric({'eval_metric': eval_metric_config})
 
@@ -206,7 +207,7 @@ def main():
         recalls.append(recall)
         f1_scores.append(f1_score)
     mean_precision = np.mean(precisions)
-    mean_f1_score = np.mean(f1_score)
+    mean_f1_score = np.mean(f1_scores)
 
     # Вывод в консоль
     print("\n" + "=" * 70)

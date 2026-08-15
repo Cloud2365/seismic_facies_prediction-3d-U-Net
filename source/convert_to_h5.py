@@ -72,11 +72,10 @@ def load_crossline_data():
         except Exception as e:
             print(f"Ошибка при загрузке {crossline_path}: {e}")
             continue
-        
+
         if seismic.ndim == 3:
             seismic = seismic[:, :, 0]
-        seismic_stack.append(seismic)
-        
+
         # Загружаем маску
         mask_path = os.path.join(MASK_DIR, mask_file)
         try:
@@ -84,11 +83,20 @@ def load_crossline_data():
         except Exception as e:
             print(f"Ошибка при загрузке {mask_path}: {e}")
             continue
-        
+
         if mask.ndim == 3:
             mask = mask[:, :, 0]
+
+        # Проверяем соответствие размеров
+        if seismic.shape != mask.shape:
+            raise ValueError(
+                f"Размеры seismic и mask не совпадают для crossline {num}: "
+                f"seismic={seismic.shape}, mask={mask.shape}"
+            )
+
+        # Добавляем только полностью согласованную пару
+        seismic_stack.append(seismic)
         mask_stack.append(mask)
-        
         if (i + 1) % 50 == 0:
             print(f"Загружено {i+1}/{len(common_nums)}")
     
@@ -98,6 +106,11 @@ def load_crossline_data():
     
     seismic_volume = np.stack(seismic_stack, axis=0)
     mask_volume = np.stack(mask_stack, axis=0)
+    if seismic_volume.shape != mask_volume.shape:
+        raise ValueError(
+            f"Итоговые размеры seismic и mask не совпадают: "
+            f"{seismic_volume.shape} vs {mask_volume.shape}"
+        )
     print(f"Сейсмика: {seismic_volume.shape}, Маски: {mask_volume.shape}")
     return seismic_volume, mask_volume
 

@@ -489,7 +489,7 @@ class SegmentationMetrics:
     иначе метрики будут накапливаться между эпохами и "размазываться".
     """
 
-    def __init__(self, n_classes=10, ignore_background=False, **kwargs):
+    def __init__(self, n_classes=10, ignore_background=True, **kwargs):
         self.n_classes = n_classes
         self.ignore_background = ignore_background
         self.reset()
@@ -525,27 +525,48 @@ class SegmentationMetrics:
 
         start = 1 if self.ignore_background else 0
 
-        pixel_acc = tp.sum() / cm.sum() if cm.sum() > 0 else float("nan")
+        pixel_acc = (
+            tp.sum() / cm.sum()
+            if cm.sum() > 0
+            else float("nan")
+        )
 
-        class_acc = np.divide(
-            tp, support,
+        class_acc_all = np.divide(
+            tp,
+            support,
             out=np.full(self.n_classes, np.nan),
             where=support > 0
-        )[start:]
+        )
 
-        class_iou = np.divide(
-            tp, union,
+        class_iou_all = np.divide(
+            tp,
+            union,
             out=np.full(self.n_classes, np.nan),
             where=union > 0
-        )[start:]
+        )
 
-        mean_class_acc = np.nanmean(class_acc)
-        mean_iou = np.nanmean(class_iou)
+        mean_class_acc = np.nanmean(
+            class_acc_all[start:]
+        )
+
+        mean_iou = np.nanmean(
+            class_iou_all[start:]
+        )
+
+        mean_iou_all = np.nanmean(
+            class_iou_all
+        )
 
         return {
             "pixel_acc": pixel_acc,
-            "class_acc": class_acc.tolist(),
+
+            "class_acc": class_acc_all[start:].tolist(),
+
             "mean_class_acc": mean_class_acc,
-            "iou": class_iou.tolist(),
+
+            "iou": class_iou_all[start:].tolist(),
+
             "mean_iou": mean_iou,
+
+            "mean_iou_all": mean_iou_all,
         }

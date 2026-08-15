@@ -301,6 +301,7 @@ class UNetTrainer:
                 pixel_acc = metrics["pixel_acc"]
                 mean_class_acc = metrics["mean_class_acc"]
                 mean_iou = metrics["mean_iou"]
+                mean_iou_all = metrics["mean_iou_all"]
 
                 class_acc = np.array(metrics["class_acc"])
                 iou = np.array(metrics["iou"])
@@ -317,6 +318,7 @@ class UNetTrainer:
                 logger.info(f"Pixel Accuracy      : {pixel_acc:.5f}")
                 logger.info(f"Mean Class Accuracy : {mean_class_acc:.5f}")
                 logger.info(f"Mean IoU            : {mean_iou:.5f}")
+                logger.info(f"Mean IoU (all)      : {mean_iou_all:.5f}")
                 logger.info(f"Class Accuracy      : {np.round(class_acc, 4)}")
                 logger.info(f"IoU                 : {np.round(iou, 4)}")
                 logger.info("=" * 70)
@@ -410,6 +412,7 @@ class UNetTrainer:
             pixel_acc = metrics["pixel_acc"]
             mean_class_acc = metrics["mean_class_acc"]
             mean_iou = metrics["mean_iou"]
+            mean_iou_all = metrics["mean_iou_all"]
 
             class_acc = np.array(metrics["class_acc"])
             iou = np.array(metrics["iou"])
@@ -421,6 +424,7 @@ class UNetTrainer:
             logger.info(f"Pixel Accuracy      : {pixel_acc:.5f}")
             logger.info(f"Mean Class Accuracy : {mean_class_acc:.5f}")
             logger.info(f"Mean IoU            : {mean_iou:.5f}")
+            logger.info(f"Mean IoU (all)      : {mean_iou_all:.5f}")
             logger.info(f"Class Accuracy      : {np.round(class_acc,4)}")
             logger.info(f"IoU                 : {np.round(iou,4)}")
             logger.info("=" * 70)

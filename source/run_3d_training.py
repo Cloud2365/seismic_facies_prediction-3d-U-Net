@@ -106,18 +106,59 @@ def generate_config(args, train_path, val_path, class_weights=None):
     if args.loss == 'CrossEntropyLoss' and args.class_weights and class_weights is not None:
         config['loss']['weight'] = class_weights
     
+        # =========================================================
+    # AUGMENTATION
+    # =========================================================
+
     if args.aug:
-        aug_list = [
+
+        raw_aug_list = [
             {
                 'name': 'RandomRotate',
-                'angle_spectrum': args.rot_angle
+                'angle_spectrum': args.rot_angle,
+                'order': 1,
+                'axes': [(1, 2)]
             },
             {
                 'name': 'RandomFlip'
             }
         ]
 
-    config['loaders']['train']['transformer']['raw'].extend(aug_list)
+        label_aug_list = [
+            {
+                'name': 'RandomRotate',
+                'angle_spectrum': args.rot_angle,
+                'order': 0,
+                'axes': [(1, 2)]
+            },
+            {
+                'name': 'RandomFlip'
+            }
+        ]
+
+        config['loaders']['train']['transformer']['raw'].extend(
+            raw_aug_list
+        )
+
+        config['loaders']['train']['transformer']['label'].extend(
+            label_aug_list
+        )
+
+    # ToTensor должен выполняться ПОСЛЕ augmentation
+    config['loaders']['train']['transformer']['raw'].append(
+        {
+            'name': 'ToTensor',
+            'expand_dims': True
+        }
+    )
+
+    config['loaders']['train']['transformer']['label'].append(
+        {
+            'name': 'ToTensor',
+            'expand_dims': False,
+            'dtype': 'long'
+        }
+    )
 
     
     os.makedirs(args.config_dir, exist_ok=True)
@@ -173,17 +214,28 @@ def main():
     n = raw.shape[0]
     print(f"Всего срезов: {n}")
 
-    # Разбиение
-    indices = np.arange(n)
-    np.random.seed(42)
-    np.random.shuffle(indices)
+    # =========================================================
+    # ПРОСТРАНСТВЕННОЕ РАЗБИЕНИЕ
+    # =========================================================
+    # Срезы идут последовательно по первой оси H5.
+    # Поэтому не перемешиваем соседние crossline между split'ами.
+
     test_size = int(n * args.per_test)
-    test_idx = indices[:test_size]
-    rest = indices[test_size:]
-    val_size = int(len(rest) * args.per_val)
-    val_idx = rest[:val_size]
-    train_idx = rest[val_size:]
-    print(f"Train: {len(train_idx)}, Val: {len(val_idx)}, Test: {len(test_idx)}")
+    val_size = int(n * args.per_val)
+    train_size = n - test_size - val_size
+    train_idx = np.arange(0, train_size)
+    val_idx = np.arange(train_size, train_size + val_size)
+    test_idx = np.arange(train_size + val_size, n)
+
+    print(
+        f"Spatial split:\n"
+        f"Train: {len(train_idx)} "
+        f"[0:{train_size}]\n"
+        f"Val: {len(val_idx)} "
+        f"[{train_size}:{train_size + val_size}]\n"
+        f"Test: {len(test_idx)} "
+        f"[{train_size + val_size}:{n}]"
+    )
 
     # Сохраняем временные train и val
     train_path = os.path.join(args.temp_dir, 'train.h5')
