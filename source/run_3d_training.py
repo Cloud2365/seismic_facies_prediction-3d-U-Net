@@ -4,7 +4,7 @@ import yaml
 import subprocess
 import numpy as np
 import h5py
-from sklearn.model_selection import train_test_split
+
 
 def compute_class_weights(labels, n_classes):
     class_counts = np.bincount(labels.flatten(), minlength=n_classes)
@@ -25,21 +25,11 @@ def generate_config(args, train_path, val_path, class_weights=None):
                     'patch_shape': args.patch_shape,
                     'stride_shape': args.stride_shape
                 },
-                'transformer': {
+               'transformer': {
                     'raw': [
-                        {'name': 'Normalize'},
-                        {
-                            'name': 'ToTensor',
-                            'expand_dims': True
-                        }
-                    ], 
-                    'label': [
-                        {
-                            'name': 'ToTensor',
-                            'expand_dims': False,
-                            'dtype': 'long'
-                        }
-                    ]
+                        {'name': 'Normalize'}
+                    ],
+                    'label': []
                 }
             },
             'val': {
@@ -106,7 +96,7 @@ def generate_config(args, train_path, val_path, class_weights=None):
     if args.loss == 'CrossEntropyLoss' and args.class_weights and class_weights is not None:
         config['loss']['weight'] = class_weights
     
-        # =========================================================
+    # =========================================================
     # AUGMENTATION
     # =========================================================
 
@@ -117,7 +107,8 @@ def generate_config(args, train_path, val_path, class_weights=None):
                 'name': 'RandomRotate',
                 'angle_spectrum': args.rot_angle,
                 'order': 1,
-                'axes': [(1, 2)]
+                'axes': [[1, 2]],
+                'debug_name': 'RAW'
             },
             {
                 'name': 'RandomFlip'
@@ -129,7 +120,8 @@ def generate_config(args, train_path, val_path, class_weights=None):
                 'name': 'RandomRotate',
                 'angle_spectrum': args.rot_angle,
                 'order': 0,
-                'axes': [(1, 2)]
+                'axes': [[1, 2]],
+                'debug_name': 'LABEL'
             },
             {
                 'name': 'RandomFlip'

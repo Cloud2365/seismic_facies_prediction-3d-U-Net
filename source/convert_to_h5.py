@@ -8,7 +8,7 @@ import re
 DATA_DIR = r"E:\Projects\AI_Oil_Gas\seismic_facies_prediction\data\row"
 CROSSLINE_DIR = os.path.join(DATA_DIR, "crosslines")
 MASK_DIR = os.path.join(DATA_DIR, "masks")
-OUTPUT_DIR = r"E:\Projects\AI_Oil_Gas\seismic_facies_prediction\pytorch-3dunet-master\my_data"
+OUTPUT_DIR = r"E:\Projects\AI_Oil_Gas\collab_project\pytorch-3dunet-master\my_data"
 # =======================
 
 def get_number_from_filename(filename, pattern):
