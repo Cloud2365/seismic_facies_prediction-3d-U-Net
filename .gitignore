@@ -12,7 +12,7 @@ env/
 data/
 temp_splits/
 # Вся библиотека pytorch-3dunet (чужой код, не загружаем)
-pytorch-3dunet-master/
+#pytorch-3dunet-master/
 
 # Графики и визуализации
 source/train_logs/
