@@ -107,8 +107,7 @@ def generate_config(args, train_path, val_path, class_weights=None):
                 'name': 'RandomRotate',
                 'angle_spectrum': args.rot_angle,
                 'order': 1,
-                'axes': [[1, 2]],
-                'debug_name': 'RAW'
+                'axes': [[1, 2]]
             },
             {
                 'name': 'RandomFlip'
@@ -120,8 +119,7 @@ def generate_config(args, train_path, val_path, class_weights=None):
                 'name': 'RandomRotate',
                 'angle_spectrum': args.rot_angle,
                 'order': 0,
-                'axes': [[1, 2]],
-                'debug_name': 'LABEL'
+                'axes': [[1, 2]]
             },
             {
                 'name': 'RandomFlip'
