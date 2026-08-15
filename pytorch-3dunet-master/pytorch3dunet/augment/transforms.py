@@ -123,22 +123,11 @@ class RandomRotate:
         self.axes = axes
         self.mode = mode
         self.order = order
-        self._debug_count = 0
-        self._debug_name = kwargs.get('debug_name', 'RandomRotate')
 
     def __call__(self, m: np.ndarray) -> np.ndarray:
         axis = self.axes[self.random_state.randint(len(self.axes))]
         angle = self.random_state.randint(-self.angle_spectrum, self.angle_spectrum)
-        if self._debug_count < 4:
-            print(
-                f"[AUG DEBUG] {self._debug_name} "
-                f"#{self._debug_count + 1}: "
-                f"angle={angle}°, "
-                f"axis={axis}, "
-                f"order={self.order}"
-            )
-        self._debug_count += 1
-
+       
         if m.ndim == 3:
             m = rotate(m, angle, axes=axis, reshape=False, order=self.order, mode=self.mode, cval=-1)
         else:
