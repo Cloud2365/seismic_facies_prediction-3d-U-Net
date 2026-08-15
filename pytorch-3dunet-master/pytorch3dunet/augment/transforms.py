@@ -42,6 +42,7 @@ class RandomFlip:
         self.random_state = random_state
         self.axes = (1, 2)
         self.axis_prob = axis_prob
+        
 
     def __call__(self, m: np.ndarray) -> np.ndarray:
         assert m.ndim in [3, 4], "Supports only 3D (DxHxW) or 4D (CxDxHxW) images"
@@ -122,10 +123,21 @@ class RandomRotate:
         self.axes = axes
         self.mode = mode
         self.order = order
+        self._debug_count = 0
+        self._debug_name = kwargs.get('debug_name', 'RandomRotate')
 
     def __call__(self, m: np.ndarray) -> np.ndarray:
         axis = self.axes[self.random_state.randint(len(self.axes))]
         angle = self.random_state.randint(-self.angle_spectrum, self.angle_spectrum)
+        if self._debug_count < 4:
+            print(
+                f"[AUG DEBUG] {self._debug_name} "
+                f"#{self._debug_count + 1}: "
+                f"angle={angle}°, "
+                f"axis={axis}, "
+                f"order={self.order}"
+            )
+        self._debug_count += 1
 
         if m.ndim == 3:
             m = rotate(m, angle, axes=axis, reshape=False, order=self.order, mode=self.mode, cval=-1)
@@ -822,6 +834,7 @@ class ToTensor:
         if self.normalize:
             # avoid division by zero
             m = (m - np.min(m)) / (np.max(m) - np.min(m) + 1e-10)
+        m = np.ascontiguousarray(m)
         if self.dtype == "long":
             return torch.from_numpy(m).long()
         else:
