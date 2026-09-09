@@ -11,6 +11,7 @@ env/
 *.hdf5
 data/
 temp_splits/
+*.png
 # Вся библиотека pytorch-3dunet (чужой код, не загружаем)
 #pytorch-3dunet-master/
 
