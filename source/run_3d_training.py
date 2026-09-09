@@ -162,12 +162,19 @@ def main():
     parser.add_argument('--data_h5', type=str,
                         default='/content/collab_project/pytorch-3dunet-master/my_data/all_data.h5',
                         help='Path to all_data.h5')
-    parser.add_argument('--per_val', type=float, default=0.2,
+    parser.add_argument('--per_val', type=float, default=0.15,
                         help='Fraction for validation (from remaining after test)')
     parser.add_argument('--per_test', type=float, default=0.15,
                         help='Fraction for test (held out)')
     parser.add_argument('--arch', type=str, default='UNet3D',
                         choices=['UNet3D', 'ResidualUNet3D', 'ResidualUNetSE3D'])
+    parser.add_argument(
+    '--split',
+    type=str,
+    default='spatial',
+    choices=['spatial', 'random'],
+    help='Dataset split method'
+    )
     parser.add_argument('--n_classes', type=int, default=10)
     parser.add_argument('--f_maps', type=int, default=32)
     parser.add_argument('--n_epoch', type=int, default=50)
@@ -205,28 +212,145 @@ def main():
     print(f"Всего срезов: {n}")
 
     # =========================================================
-    # ПРОСТРАНСТВЕННОЕ РАЗБИЕНИЕ
+    # SPLIT DATASET
     # =========================================================
-    # Срезы идут последовательно по первой оси H5.
-    # Поэтому не перемешиваем соседние crossline между split'ами.
 
     test_size = int(n * args.per_test)
     val_size = int(n * args.per_val)
     train_size = n - test_size - val_size
-    train_idx = np.arange(0, train_size)
-    val_idx = np.arange(train_size, train_size + val_size)
-    test_idx = np.arange(train_size + val_size, n)
 
-    print(
-        f"Spatial split:\n"
-        f"Train: {len(train_idx)} "
-        f"[0:{train_size}]\n"
-        f"Val: {len(val_idx)} "
-        f"[{train_size}:{train_size + val_size}]\n"
-        f"Test: {len(test_idx)} "
-        f"[{train_size + val_size}:{n}]"
-    )
 
+    if args.split == 'spatial':
+
+        # -----------------------------------------------------
+        # SPATIAL SPLIT
+        # -----------------------------------------------------
+        # Срезы идут последовательно.
+        # Соседние срезы остаются в одном split.
+
+        train_idx = np.arange(
+            0,
+            train_size
+        )
+
+        val_idx = np.arange(
+            train_size,
+            train_size + val_size
+        )
+
+        test_idx = np.arange(
+            train_size + val_size,
+            n
+        )
+
+        print()
+        print("=" * 70)
+        print("SPATIAL SPLIT")
+        print("=" * 70)
+
+        print(
+            f"Train: {len(train_idx)} "
+            f"[0:{train_size}]"
+        )
+
+        print(
+            f"Val:   {len(val_idx)} "
+            f"[{train_size}:{train_size + val_size}]"
+        )
+
+        print(
+            f"Test:  {len(test_idx)} "
+            f"[{train_size + val_size}:{n}]"
+        )
+
+
+    elif args.split == 'random':
+
+        # -----------------------------------------------------
+        # RANDOM SPLIT
+        # -----------------------------------------------------
+        # Все срезы перемешиваются.
+        # Затем случайно выбираются train / val / test.
+
+        rng = np.random.default_rng(42)
+
+        indices = np.arange(n)
+
+        rng.shuffle(indices)
+
+        train_idx = indices[
+            :train_size
+        ]
+
+        val_idx = indices[
+            train_size:
+            train_size + val_size
+        ]
+
+        test_idx = indices[
+            train_size + val_size:
+        ]
+
+        print()
+        print("=" * 70)
+        print("RANDOM SPLIT")
+        print("=" * 70)
+
+        print(
+            f"Train: {len(train_idx)}"
+        )
+
+        print(
+            f"Val:   {len(val_idx)}"
+        )
+
+        print(
+            f"Test:  {len(test_idx)}"
+        )
+
+        # -----------------------------------------------------
+        # Проверяем пересечения
+        # -----------------------------------------------------
+
+        train_set = set(
+            train_idx.tolist()
+        )
+
+        val_set = set(
+            val_idx.tolist()
+        )
+
+        test_set = set(
+            test_idx.tolist()
+        )
+
+        print()
+        print("Checking intersections:")
+
+        print(
+            "Train ∩ Val:",
+            len(train_set & val_set)
+        )
+
+        print(
+            "Train ∩ Test:",
+            len(train_set & test_set)
+        )
+
+        print(
+            "Val ∩ Test:",
+            len(val_set & test_set)
+        )
+    if args.split == 'random':
+        args.temp_dir = os.path.join(
+            args.temp_dir,
+            'random'
+            )
+    else:
+        args.temp_dir = os.path.join(
+             args.temp_dir,
+            'spatial'
+            )
     # Сохраняем временные train и val
     train_path = os.path.join(args.temp_dir, 'train.h5')
     val_path = os.path.join(args.temp_dir, 'val.h5')
