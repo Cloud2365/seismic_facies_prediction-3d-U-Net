@@ -1,0 +1,2 @@
+classes=[2, 3, 4, 5]
+slice=(slice(0, 16, None), slice(64, 192, None), slice(0, 128, None))
