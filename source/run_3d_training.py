@@ -17,6 +17,7 @@ def compute_class_weights(labels, n_classes):
 def generate_config(args, train_path, val_path, class_weights=None):
     config = {
         'loaders': {
+            'dataset': 'LazyHDF5Dataset',
             'train': {
                 'file_paths': [train_path],
                 'slice_builder': {
@@ -70,8 +71,11 @@ def generate_config(args, train_path, val_path, class_weights=None):
             'is_segmentation': True
         },
         'loss': {
-            'name': args.loss
-        },
+    'name': args.loss,
+    'dice_weight': 0.5,
+    'ce_weight': 0.5,
+    'normalization': 'softmax'
+},
         'optimizer': {
             'name': 'Adam',
             'learning_rate': args.lr,
@@ -93,7 +97,7 @@ def generate_config(args, train_path, val_path, class_weights=None):
         }
     }
 
-    if args.loss == 'CrossEntropyLoss' and args.class_weights and class_weights is not None:
+    if ( args.loss in ['CrossEntropyLoss', 'DiceCrossEntropyLoss'] and args.class_weights and class_weights is not None):
         config['loss']['weight'] = class_weights
     
     # =========================================================
@@ -111,7 +115,13 @@ def generate_config(args, train_path, val_path, class_weights=None):
             },
             {
                 'name': 'RandomFlip'
-            }
+            },
+                    {
+            'name': 'RandomContrast',
+            'alpha': [0.9, 1.1],
+            'mean': 0.0,
+            'execution_probability': 0.5
+        }
         ]
 
         label_aug_list = [
@@ -186,8 +196,16 @@ def main():
     parser.add_argument('--stride_shape', type=int, nargs=3, default=[8, 64, 64])
     parser.add_argument('--aug', action='store_true', help='Enable augmentation')
     parser.add_argument('--rot_angle', type=float, default=10.0)
-    parser.add_argument('--loss', type=str, default='CrossEntropyLoss',
-                        choices=['GeneralizedDiceLoss', 'CrossEntropyLoss'])
+    parser.add_argument(
+    '--loss',
+    type=str,
+    default='DiceCrossEntropyLoss',
+    choices=[
+        'GeneralizedDiceLoss',
+        'CrossEntropyLoss',
+        'DiceCrossEntropyLoss'
+    ]
+)
     parser.add_argument('--class_weights', action='store_true',
                         help='Compute and use class weights (only for CrossEntropyLoss)')
                         
@@ -200,7 +218,8 @@ def main():
     args = parser.parse_args()
 
     # Создаём папки
-    for d in [args.temp_dir, args.checkpoint_dir, args.log_dir, args.config_dir]:
+    spatial_dir = os.path.join(args.temp_dir, 'spatial')
+    for d in [args.temp_dir,spatial_dir, args.checkpoint_dir, args.log_dir, args.config_dir]:
         os.makedirs(d, exist_ok=True)
 
     # Загружаем данные
@@ -369,7 +388,7 @@ def main():
 
     # Веса классов
     class_weights_list = None
-    if args.class_weights and args.loss == 'CrossEntropyLoss':
+    if args.class_weights and args.loss in ['CrossEntropyLoss', 'DiceCrossEntropyLoss']:
         print("Вычисление весов классов...")
         with h5py.File(train_path, 'r') as f:
             train_labels = f['label'][:]
@@ -378,6 +397,10 @@ def main():
 
     # Генерация конфига и запуск
         # Генерация конфига и запуск
+    del raw
+    del label
+    import gc
+    gc.collect()
     config_path = generate_config(args, train_path, val_path, class_weights_list)
     print(f"Конфиг сохранён: {config_path}")
     
@@ -394,3 +417,6 @@ def main():
 
 if __name__ == '__main__': 
     main()
+    
+
+  

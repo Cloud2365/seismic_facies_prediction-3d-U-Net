@@ -1,2 +1,0 @@
-classes=[4, 5, 6, 7, 8]
-slice=(slice(0, 16, None), slice(192, 320, None), slice(0, 128, None))

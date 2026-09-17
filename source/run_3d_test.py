@@ -6,10 +6,6 @@ import h5py
 import numpy as np
 import torch
 from PIL import Image
-from sklearn.metrics import (
-    confusion_matrix,
-    precision_recall_fscore_support
-)
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import pandas as pd
@@ -24,10 +20,17 @@ PROJECT_ROOT = os.path.abspath(
 
 sys.path.insert(0, PROJECT_ROOT)
 
+from volume_inference import (
+    VolumeAccumulator,
+    confusion_from_volumes,
+    expected_overlap_count,
+    metrics_from_confusion,
+    spatial_slice_from_index,
+)
+
 from pytorch3dunet.datasets.hdf5 import StandardHDF5Dataset
 from pytorch3dunet.unet3d.model import get_model
 from pytorch3dunet.unet3d.config import load_config
-
 
 # ============================================================
 # ARGUMENTS
@@ -41,7 +44,7 @@ def parse_args():
 
     parser.add_argument(
         "--checkpoint",
-        default="./my_models/best_checkpoint_old.pytorch",
+        default="./my_models/best_checkpoint.pytorch",
         help="Path to checkpoint.pytorch"
     )
 
@@ -67,7 +70,7 @@ def parse_args():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=2,
+        default=1,
         help="Batch size for testing"
     )
 
@@ -81,13 +84,13 @@ def parse_args():
     parser.add_argument(
         "--max_vis_samples",
         type=int,
-        default=20,
+        default=16,
         help="Maximum number of patches saved for visualization"
     )
 
     parser.add_argument(
         "--output_dir",
-        default="test_logs_old",
+        default="test_logs",
         help="Directory for test results"
     )
 
@@ -614,9 +617,18 @@ def main():
     # METRIC STORAGE
     # --------------------------------------------------------
 
-    all_targets = []
-    all_preds = []
+    expected_count = expected_overlap_count(
+    dataset.volume_shape,
+    (16, 128, 128),
+    (8, 64, 64)
+    )
 
+    accumulator = VolumeAccumulator(
+        dataset.volume_shape,
+        args.n_classes
+    )
+
+ 
     saved_slices = []
 
     covered_classes = set()
@@ -635,7 +647,9 @@ def main():
 
         test_h5 = h5py.File(args.h5, "r")
         label_dataset = test_h5["label"]
-
+        label_volume = np.asarray(
+            label_dataset[:]
+        )
         for batch_idx, batch in enumerate(tqdm(
                 loader,
                 desc="Testing",
@@ -699,40 +713,37 @@ def main():
             # MODEL PREDICTION
             # ============================================================
 
-            output = model(
-                input_tensor
-            )
-
-            prediction = torch.argmax(
-                output,
-                dim=1
-            )
 
             # ============================================================
             # FLATTEN METRICS
             # ============================================================
 
-            target_np = (
-                target_tensor
-                .cpu()
-                .numpy()
-                .reshape(-1)
+            _probs, logits = model(
+            input_tensor,
+            return_logits=True
+        )
+
+            values = torch.softmax(
+                logits,
+                dim=1
             )
 
-            pred_np = (
-                prediction
-                .cpu()
-                .numpy()
-                .reshape(-1)
+            prediction = torch.argmax(
+                values,
+                dim=1
             )
 
-            all_targets.append(
-                target_np
+            values_np = values.cpu().numpy()
+            pred_np = prediction.cpu().numpy()
+
+            sl = spatial_slice_from_index(patch_slice)
+
+            accumulator.add_patch(
+                values_np[0],
+                sl
             )
 
-            all_preds.append(
-                pred_np
-            )
+            
 
             # ============================================================
             # VISUALIZATION SELECTION
@@ -830,176 +841,99 @@ def main():
 
         test_h5.close()
 
+       # --------------------------------------------------------
+    # VOLUME-LEVEL RECONSTRUCTION
     # --------------------------------------------------------
-    # CONCAT METRICS
-    # --------------------------------------------------------
-
-    all_targets = np.concatenate(
-        all_targets
-    )
-
-    all_preds = np.concatenate(
-        all_preds
-    )
 
     print()
     print("=" * 80)
-    print("TEST FINISHED")
+    print("RECONSTRUCTING TEST VOLUME")
     print("=" * 80)
 
-    # --------------------------------------------------------
-    # CONFUSION MATRIX
-    # --------------------------------------------------------
-
-    cm = confusion_matrix(
-        all_targets,
-        all_preds,
-        labels=list(
-            range(args.n_classes)
-        )
+    recon_stats = accumulator.validate(
+        expected_count=expected_count,
+        patch_shape=(16, 128, 128),
+        stride_shape=(8, 64, 64)
     )
 
-    print_confusion_matrix(
-        cm,
+    print(
+        "Reconstruction OK"
+    )
+
+    print(
+        f"prediction_count min/max/mean: "
+        f"{recon_stats['prediction_count_min']:.3f}/"
+        f"{recon_stats['prediction_count_max']:.3f}/"
+        f"{recon_stats['prediction_count_mean']:.3f}"
+    )
+
+    # --------------------------------------------------------
+    # FINALIZE FULL VOLUME
+    # --------------------------------------------------------
+
+    pred_volume, _ = accumulator.finalize()
+
+    # --------------------------------------------------------
+    # VOLUME-LEVEL CONFUSION MATRIX
+    # --------------------------------------------------------
+
+    volume_cm = confusion_from_volumes(
+        label_volume,
+        pred_volume,
         args.n_classes
     )
 
     # --------------------------------------------------------
-    # CLASS METRICS
+    # VOLUME-LEVEL METRICS
     # --------------------------------------------------------
 
-    precision, recall, f1, support = (
-        precision_recall_fscore_support(
-            all_targets,
-            all_preds,
-            labels=list(
-                range(args.n_classes)
-            ),
-            zero_division=0
-        )
+    metrics = metrics_from_confusion(
+        volume_cm
     )
 
-    # --------------------------------------------------------
-    # IoU
-    # --------------------------------------------------------
-
-    iou = []
-
-    for class_id in range(
-        args.n_classes
-    ):
-
-        true_positive = cm[
-            class_id,
-            class_id
-        ]
-
-        false_positive = (
-            cm[:, class_id].sum()
-            - true_positive
-        )
-
-        false_negative = (
-            cm[class_id, :].sum()
-            - true_positive
-        )
-
-        denominator = (
-            true_positive
-            + false_positive
-            + false_negative
-        )
-
-        if denominator == 0:
-
-            class_iou = 0.0
-
-        else:
-
-            class_iou = (
-                true_positive
-                / denominator
-            )
-
-        iou.append(
-            class_iou
-        )
-
-    iou = np.array(
-        iou
-    )
-
-    # --------------------------------------------------------
-    # ACCURACY
-    # --------------------------------------------------------
-
-    pixel_accuracy = (
-        np.mean(
-            all_targets
-            == all_preds
-        )
-    )
-
-    class_accuracy = []
-
-    for class_id in range(
-        args.n_classes
-    ):
-
-        class_mask = (
-            all_targets
-            == class_id
-        )
-
-        if class_mask.sum() == 0:
-
-            class_acc = 0.0
-
-        else:
-
-            class_acc = np.mean(
-                all_preds[class_mask]
-                == class_id
-            )
-
-        class_accuracy.append(
-            class_acc
-        )
-
-    class_accuracy = np.array(
-        class_accuracy
-    )
+    pixel_accuracy = metrics["pixel_accuracy"]
 
     mean_class_accuracy = (
-        class_accuracy.mean()
+        metrics["mean_class_accuracy"]
     )
 
-    mean_iou = (
-        iou.mean()
+    mean_iou_no_background = (
+        metrics["mean_iou_no_background"]
     )
+
+    mean_iou_with_background = (
+        metrics["mean_iou_with_background"]
+    )
+
+    per_class = metrics["per_class"]
 
     # --------------------------------------------------------
-    # RESULTS
+    # FINAL RESULTS
     # --------------------------------------------------------
 
     print()
     print("=" * 100)
-    print("FINAL TEST RESULTS")
+    print("FINAL TEST RESULTS — VOLUME LEVEL")
     print("=" * 100)
 
     print(
-        f"Pixel Accuracy       : "
+        f"Pixel Accuracy              : "
         f"{pixel_accuracy:.5f}"
     )
 
     print(
-        f"Mean Class Accuracy  : "
+        f"Mean Class Accuracy         : "
         f"{mean_class_accuracy:.5f}"
     )
 
     print(
-        f"Mean IoU             : "
-        f"{mean_iou:.5f}"
+        f"Mean IoU (without class 0)  : "
+        f"{mean_iou_no_background:.5f}"
+    )
+
+    print(
+        f"Mean IoU (with class 0)     : "
+        f"{mean_iou_with_background:.5f}"
     )
 
     print()
@@ -1010,32 +944,52 @@ def main():
         f"{'Precision':>14}"
         f"{'Recall':>14}"
         f"{'F1':>14}"
-        f"{'Pixels':>14}"
+        f"{'Support':>14}"
     )
 
     print("-" * 100)
 
-    for class_id in range(
-        args.n_classes
-    ):
+    # --------------------------------------------------------
+    # PER-CLASS METRICS
+    # --------------------------------------------------------
+
+    for class_id in range(args.n_classes):
+
+        class_metrics = {
+            "accuracy": per_class["accuracy"][class_id],
+            "iou": per_class["iou"][class_id],
+            "precision": per_class["precision"][class_id],
+            "recall": per_class["recall"][class_id],
+            "f1": per_class["f1"][class_id],
+            "support": per_class["support"][class_id],
+        }
 
         print(
             f"{class_id:>8}"
-            f"{class_accuracy[class_id]:>13.4f}"
-            f"{iou[class_id]:>14.4f}"
-            f"{precision[class_id]:>14.4f}"
-            f"{recall[class_id]:>14.4f}"
-            f"{f1[class_id]:>14.4f}"
-            f"{support[class_id]:>14}"
+            f"{class_metrics['accuracy']:>14.4f}"
+            f"{class_metrics['iou']:>14.4f}"
+            f"{class_metrics['precision']:>14.4f}"
+            f"{class_metrics['recall']:>14.4f}"
+            f"{class_metrics['f1']:>14.4f}"
+            f"{class_metrics['support']:>14}"
         )
 
     print("-" * 100)
 
     # --------------------------------------------------------
+    # CONFUSION MATRIX — CONSOLE
+    # --------------------------------------------------------
+
+    print_confusion_matrix(
+        volume_cm,
+        args.n_classes
+    )
+
+    # --------------------------------------------------------
     # SAVE CONFUSION MATRIX CSV
     # --------------------------------------------------------
 
-    cm_percent = cm.astype(
+    cm_percent = volume_cm.astype(
         np.float64
     )
 
@@ -1070,7 +1024,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # SAVE NUMERICAL RESULTS
+    # SAVE CLASS METRICS CSV
     # --------------------------------------------------------
 
     results_csv = os.path.join(
@@ -1078,71 +1032,57 @@ def main():
         "class_metrics.csv"
     )
 
-    # --------------------------------------------------------
-    # Средние значения по классам
-    # --------------------------------------------------------
+    rows = []
 
-    mean_accuracy = class_accuracy.mean()
-    mean_iou = iou.mean()
-    mean_precision = precision.mean()
-    mean_recall = recall.mean()
-    mean_f1 = f1.mean()
+    for class_id in range(args.n_classes):
 
-    # --------------------------------------------------------
-    # Результаты по каждому классу
-    # --------------------------------------------------------
-
-    results_df = pd.DataFrame({
-        "class": np.arange(
-            args.n_classes
-        ),
-
-        "accuracy": class_accuracy,
-
-        "iou": iou,
-
-        "precision": precision,
-
-        "recall": recall,
-
-        "f1": f1,
-
-        "pixels": support
-    })
+        rows.append(
+            {
+                "class": class_id,
+                "accuracy": per_class["accuracy"][class_id],
+                "iou": per_class["iou"][class_id],
+                "precision": per_class["precision"][class_id],
+                "recall": per_class["recall"][class_id],
+                "f1": per_class["f1"][class_id],
+                "pixels": per_class["support"][class_id]
+            }
+        )
 
     # --------------------------------------------------------
-    # Добавляем Mean
+    # MEAN ROW
     # --------------------------------------------------------
 
-    mean_row = pd.DataFrame([
+    rows.append(
         {
             "class": "Mean",
+            "accuracy": mean_class_accuracy,
+            "iou": mean_iou_no_background,
+            "precision": np.mean(
+                [
+                    per_class["precision"][class_id]
+                    for class_id in range(args.n_classes)
+                ]
+            ),
+            "recall": np.mean(
+                [
+                    per_class["recall"][class_id]
+                    for class_id in range(args.n_classes)
+                ]
+            ),
 
-            "accuracy": mean_accuracy,
-
-            "iou": mean_iou,
-
-            "precision": mean_precision,
-
-            "recall": mean_recall,
-
-            "f1": mean_f1,
-
+            "f1": np.mean(
+                [
+                    per_class["f1"][class_id]
+                    for class_id in range(args.n_classes)
+                ]
+            ),
             "pixels": ""
         }
-    ])
-
-    results_df = pd.concat(
-        [
-            results_df,
-            mean_row
-        ],
-        ignore_index=True
     )
 
-    # --------------------------------------------------------
-    # Сохраняем CSV
-    # --------------------------------------------------------
+    results_df = pd.DataFrame(
+        rows
+    )
 
     results_df.to_csv(
         results_csv,

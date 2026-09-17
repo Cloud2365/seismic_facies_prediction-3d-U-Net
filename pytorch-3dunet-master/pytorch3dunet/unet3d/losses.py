@@ -248,7 +248,47 @@ class WeightedSmoothL1Loss(nn.SmoothL1Loss):
         l1[mask] = l1[mask] * self.weight
 
         return l1.mean()
+    
+class DiceCrossEntropyLoss(nn.Module):
+    """
+    Combination of class-weighted CrossEntropy and multi-class Dice loss.
 
+    loss = ce_weight * weighted CE + dice_weight * Dice loss
+    """
+
+    def __init__(
+        self,
+        weight=None,
+        dice_weight=0.5,
+        ce_weight=0.5,
+        normalization='softmax'
+    ):
+        super().__init__()
+
+        self.dice_weight = dice_weight
+        self.ce_weight = ce_weight
+
+        self.ce = nn.CrossEntropyLoss(weight=weight)
+
+        self.dice = DiceLoss(
+            weight=None,
+            normalization=normalization
+        )
+
+    def forward(self, input, target):
+        ce_loss = self.ce(input, target)
+
+        target_one_hot = F.one_hot(
+            target,
+            num_classes=input.shape[1]
+        ).permute(0, 4, 1, 2, 3).float()
+
+        dice_loss = self.dice(input, target_one_hot)
+
+        return (
+            self.ce_weight * ce_loss
+            + self.dice_weight * dice_loss
+        )
 
 def flatten(tensor):
     """Flattens a given tensor such that the channel axis is first.
@@ -307,6 +347,7 @@ def get_loss_criterion(config):
     return loss
 
 
+
 def _create_loss(name, loss_config, weight, ignore_index, pos_weight):
     if name == "BCEWithLogitsLoss":
         return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
@@ -327,6 +368,17 @@ def _create_loss(name, loss_config, weight, ignore_index, pos_weight):
     elif name == "DiceLoss":
         normalization = loss_config.get("normalization", "sigmoid")
         return DiceLoss(weight=weight, normalization=normalization)
+    elif name == "DiceCrossEntropyLoss":
+        dice_weight = loss_config.get("dice_weight", 0.5)
+        ce_weight = loss_config.get("ce_weight", 0.5)
+        normalization = loss_config.get("normalization", "softmax")
+
+        return DiceCrossEntropyLoss(
+            weight=weight,
+            dice_weight=dice_weight,
+            ce_weight=ce_weight,
+            normalization=normalization
+        )
     elif name == "MSELoss":
         return MSELoss()
     elif name == "SmoothL1Loss":
