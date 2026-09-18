@@ -144,7 +144,7 @@ class UNetTrainer:
         skip_train_validation=False,
         resume=None,
         pre_trained=None,
-        max_val_images=100,
+        max_val_images=4,
         device: TorchDevice | None = None,
     ):
         self.max_val_images = max_val_images
@@ -395,8 +395,12 @@ class UNetTrainer:
                 val_losses.update(loss.item(), self._batch_size(input))
                 metrics = self.eval_criterion(output, target)   # накопленные метрики с начала валидации
                 # save val images for logging
-                if i in indices:
-                    imgs = (input.cpu().numpy(), target.cpu().numpy(), output.cpu().numpy())
+                if i in indices and len(images_for_logging) < self.max_val_images:
+                    imgs = (
+                        input.cpu().numpy(),
+                        target.cpu().numpy(),
+                        output.cpu().numpy()
+                    )
                     images_for_logging.append(imgs + (i,))
 
                 if self.validate_iters is not None and self.validate_iters <= i:
