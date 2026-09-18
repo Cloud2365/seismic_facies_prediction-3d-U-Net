@@ -871,7 +871,12 @@ def main():
     # FINALIZE FULL VOLUME
     # --------------------------------------------------------
 
-    pred_volume, _ = accumulator.finalize()
+    pred_volume, averaged = accumulator.finalize()
+
+    confidence = averaged.max(axis=0).astype(np.float16)
+
+    prob = np.clip(averaged, 1e-8, 1.0)
+    entropy = ( -(prob * np.log(prob)).sum(axis=0)).astype(np.float16)
 
     # --------------------------------------------------------
     # VOLUME-LEVEL CONFUSION MATRIX
@@ -1094,7 +1099,33 @@ def main():
         f"Class metrics saved to:"
         f"\n{results_csv}"
     )
+    confidence_path = os.path.join(
+    args.output_dir,
+    "prediction_confidence.npy"
+)
 
+    entropy_path = os.path.join(
+        args.output_dir,
+        "prediction_entropy.npy"
+    )
+
+    np.save(
+        confidence_path,
+        confidence
+    )
+
+    np.save(
+        entropy_path,
+        entropy
+    )
+
+    print(
+        f"Confidence map saved to:\n{confidence_path}"
+    )
+
+    print(
+        f"Entropy map saved to:\n{entropy_path}"
+    )
     # --------------------------------------------------------
     # SAVE VISUALIZATIONS
     # --------------------------------------------------------

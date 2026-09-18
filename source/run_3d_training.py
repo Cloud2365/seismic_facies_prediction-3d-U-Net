@@ -4,6 +4,7 @@ import yaml
 import subprocess
 import numpy as np
 import h5py
+import gc
 
 
 def compute_class_weights(labels, n_classes):
@@ -16,6 +17,7 @@ def compute_class_weights(labels, n_classes):
 
 def generate_config(args, train_path, val_path, class_weights=None):
     config = {
+        'manual_seed': args.seed,
         'loaders': {
             'dataset': 'LazyHDF5Dataset',
             'train': {
@@ -68,7 +70,8 @@ def generate_config(args, train_path, val_path, class_weights=None):
             'f_maps': args.f_maps,
             'layer_order': 'gcr',
             'num_groups': 8,
-            'is_segmentation': True
+            'is_segmentation': True,
+            'final_sigmoid': False
         },
         'loss': {
     'name': args.loss,
@@ -186,6 +189,7 @@ def main():
     help='Dataset split method'
     )
     parser.add_argument('--n_classes', type=int, default=10)
+    parser.add_argument('--seed',type=int,default=42,help='Random seed for reproducible experiments')
     parser.add_argument('--f_maps', type=int, default=32)
     parser.add_argument('--n_epoch', type=int, default=50)
     parser.add_argument('--batch_size', type=int, default=2)
@@ -394,12 +398,13 @@ def main():
             train_labels = f['label'][:]
         class_weights_list = compute_class_weights(train_labels, args.n_classes)
         print("Веса:", class_weights_list)
+        del train_labels
+        gc.collect()
 
     # Генерация конфига и запуск
         # Генерация конфига и запуск
     del raw
     del label
-    import gc
     gc.collect()
     config_path = generate_config(args, train_path, val_path, class_weights_list)
     print(f"Конфиг сохранён: {config_path}")
