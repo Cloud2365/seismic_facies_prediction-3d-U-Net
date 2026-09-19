@@ -118,13 +118,7 @@ def generate_config(args, train_path, val_path, class_weights=None):
             },
             {
                 'name': 'RandomFlip'
-            },
-                    {
-            'name': 'RandomContrast',
-            'alpha': [0.9, 1.1],
-            'mean': 0.0,
-            'execution_probability': 0.5
-        }
+            }
         ]
 
         label_aug_list = [
