@@ -620,7 +620,7 @@ else:
                 },
                 {
                     "name": "ToTensor",
-                    "expand_dims": False
+                    "expand_dims": True
                 }
             ]
         }
