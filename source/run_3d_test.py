@@ -28,7 +28,10 @@ from volume_inference import (
     spatial_slice_from_index,
 )
 
-from pytorch3dunet.datasets.hdf5 import StandardHDF5Dataset
+from pytorch3dunet.datasets.hdf5 import (
+    StandardHDF5Dataset,
+    LazyHDF5DatasetWithDepth,
+)
 from pytorch3dunet.unet3d.model import get_model
 from pytorch3dunet.unet3d.config import load_config
 
@@ -44,13 +47,13 @@ def parse_args():
 
     parser.add_argument(
         "--checkpoint",
-        default="./my_models/best_checkpoint.pytorch",
+        default="./my_models/best_checkpoint_no_aug.pytorch",
         help="Path to checkpoint.pytorch"
     )
 
     parser.add_argument(
         "--h5",
-        default="./temp_splits/test.h5",
+        default="./temp_splits/spatial/test.h5",
         help="Path to test HDF5 file"
     )
 
@@ -93,6 +96,11 @@ def parse_args():
         default="test_logs",
         help="Directory for test results"
     )
+    parser.add_argument(
+    "--absolute_depth",
+    action="store_true",
+    help="Use normalized absolute depth as a second input channel"
+)
 
     return parser.parse_args()
 
@@ -543,10 +551,48 @@ def main():
     # Здесь используем только raw + label.
     # Никаких random augmentations.
 
+if args.absolute_depth:
+
+    dataset = LazyHDF5DatasetWithDepth(
+        file_path=args.h5,
+        phase="test",
+        slice_builder_config={
+            "name": "SliceBuilder",
+            "ndim": 3,
+            "patch_shape": [
+                16,
+                128,
+                128
+            ],
+            "stride_shape": [
+                8,
+                64,
+                64
+            ]
+        },
+        transformer_config={
+            "raw": [
+                {
+                    "name": "ToTensor",
+                    "expand_dims": False
+                }
+            ],
+            "label": [
+                {
+                    "name": "ToTensor",
+                    "dtype": "long",
+                    "expand_dims": False
+                }
+            ]
+        }
+    )
+
+else:
+
     dataset = StandardHDF5Dataset(
         file_path=args.h5,
         phase="test",
-       slice_builder_config={
+        slice_builder_config={
             "name": "SliceBuilder",
             "ndim": 3,
             "patch_shape": [
@@ -574,7 +620,7 @@ def main():
                 },
                 {
                     "name": "ToTensor",
-                    "expand_dims": True
+                    "expand_dims": False
                 }
             ]
         }

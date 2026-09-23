@@ -19,7 +19,9 @@ def generate_config(args, train_path, val_path, class_weights=None):
     config = {
         'manual_seed': args.seed,
         'loaders': {
-            'dataset': 'LazyHDF5Dataset',
+            'dataset': ('LazyHDF5DatasetWithDepth'
+        if args.absolute_depth
+        else 'LazyHDF5Dataset'),
             'train': {
                 'file_paths': [train_path],
                 'slice_builder': {
@@ -29,9 +31,11 @@ def generate_config(args, train_path, val_path, class_weights=None):
                     'stride_shape': args.stride_shape
                 },
                'transformer': {
-                    'raw': [
-                        {'name': 'Normalize'}
-                    ],
+                    'raw': []
+                if args.absolute_depth
+                else [
+                    {'name': 'Normalize'}
+                ],
                     'label': []
                 }
             },
@@ -44,7 +48,9 @@ def generate_config(args, train_path, val_path, class_weights=None):
                     'stride_shape': args.stride_shape
                 },
                 'transformer': {
-                     'raw': [
+                     'raw':[]
+                    if args.absolute_depth
+                    else [
                         {'name': 'Normalize'},
                         {
                             'name': 'ToTensor',
@@ -65,7 +71,7 @@ def generate_config(args, train_path, val_path, class_weights=None):
         },
         'model': {
             'name': args.arch,
-            'in_channels': 1,
+            'in_channels': 2 if args.absolute_depth else 1,
             'out_channels': args.n_classes,
             'f_maps': args.f_maps,
             'layer_order': 'gcr',
@@ -193,6 +199,11 @@ def main():
     parser.add_argument('--patch_shape', type=int, nargs=3, default=[16, 128, 128])
     parser.add_argument('--stride_shape', type=int, nargs=3, default=[8, 64, 64])
     parser.add_argument('--aug', action='store_true', help='Enable augmentation')
+    parser.add_argument(
+    '--absolute_depth',
+    action='store_true',
+    help='Add normalized absolute depth as a second input channel'
+)
     parser.add_argument('--rot_angle', type=float, default=10.0)
     parser.add_argument(
     '--loss',

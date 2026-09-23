@@ -333,3 +333,138 @@ class LazyHDF5Dataset(AbstractHDF5Dataset):
 
     def is_lazy(self) -> bool:
         return True
+
+
+class LazyHDF5DatasetWithDepth(LazyHDF5Dataset):
+    """
+    Lazy HDF5 dataset with an additional absolute-depth channel.
+
+    Output raw patch:
+        [2, D, H, W]
+
+    Channel 0:
+        seismic normalized exactly like the existing Normalize transform
+
+    Channel 1:
+        absolute depth normalized globally to [-1, 1]
+    """
+
+    def _normalize_seismic(self, patch):
+        patch = np.asarray(patch, dtype=np.float32)
+
+        min_value = np.min(patch)
+        max_value = np.max(patch)
+
+        normalized = (
+            2.0 * (patch - min_value)
+            / (max_value - min_value + 1e-10)
+            - 1.0
+        )
+
+        return np.clip(
+            normalized,
+            -1.0,
+            1.0
+        )
+
+    def _make_depth_channel(self, idx, spatial_shape):
+        # Dataset uses spatial indices as:
+        # (depth, height, width)
+        if len(idx) == 4:
+            idx = idx[1:]
+
+        z_slice = idx[0]
+
+        z_start = z_slice.start
+        z_stop = z_slice.stop
+
+        total_depth = self.volume_shape[0]
+
+        # Global absolute depth in [-1, 1]
+        depth_values = np.linspace(
+            -1.0,
+            1.0,
+            total_depth,
+            dtype=np.float32
+        )
+
+        depth_values = depth_values[
+            z_start:z_stop
+        ]
+
+        depth_channel = depth_values[
+            :, None, None
+        ]
+
+        depth_channel = np.broadcast_to(
+            depth_channel,
+            spatial_shape
+        )
+
+        return depth_channel.astype(
+            np.float32,
+            copy=False
+        )
+
+    def get_raw_patch(self, idx):
+        with h5py.File(
+            self.file_path,
+            "r"
+        ) as f:
+
+            patch = f[
+                self.raw_internal_path
+            ][idx]
+
+        seismic = self._normalize_seismic(
+            patch
+        )
+
+        depth = self._make_depth_channel(
+            idx,
+            seismic.shape
+        )
+
+        return np.stack(
+            [
+                seismic,
+                depth
+            ],
+            axis=0
+        )
+
+    def get_raw_padded_patch(self, idx):
+        with h5py.File(
+            self.file_path,
+            "r"
+        ) as f:
+
+            raw = f[
+                self.raw_internal_path
+            ]
+
+            patch = raw[idx]
+
+        # Здесь halo не используется в нашем эксперименте,
+        # но сохраняем совместимость с Dataset API.
+        seismic = self._normalize_seismic(
+            patch
+        )
+
+        if len(idx) == 4:
+            spatial_idx = idx[1:]
+        else:
+            spatial_idx = idx
+
+        depth = self._make_depth_channel(
+            spatial_idx,
+            seismic.shape
+        )
+
+        return np.stack(
+            [
+                seismic,
+                depth
+            ],
+            axis=0
+        )
