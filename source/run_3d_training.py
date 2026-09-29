@@ -15,7 +15,7 @@ def compute_class_weights(labels, n_classes):
     return weights.tolist()
     
 
-def generate_config(args, train_path, val_path, class_weights=None):
+def generate_config(args, train_paths, val_path, class_weights=None):
     config = {
         'manual_seed': args.seed,
         'loaders': {
@@ -23,7 +23,7 @@ def generate_config(args, train_path, val_path, class_weights=None):
         if args.absolute_depth
         else 'LazyHDF5Dataset'),
             'train': {
-                'file_paths': [train_path],
+                'file_paths': train_paths,
                 'slice_builder': {
                     'ndim': 3,  
                     'name': 'SliceBuilder',
@@ -185,7 +185,7 @@ def main():
     '--split',
     type=str,
     default='spatial',
-    choices=['spatial', 'random'],
+    choices=['spatial', 'random','e5'],
     help='Dataset split method'
     )
     parser.add_argument('--n_classes', type=int, default=10)
@@ -290,6 +290,75 @@ def main():
             f"Test:  {len(test_idx)} "
             f"[{train_size + val_size}:{n}]"
         )
+    elif args.split == 'e5':
+
+    # -----------------------------------------------------
+    # E5: TRAIN | TEST | TRAIN | VAL
+    # -----------------------------------------------------
+    #
+    # TRAIN:
+    #   [0:310] + [452:761] = 619 crosslines
+    #
+    # TEST:
+    #   [310:452] = 142 crosslines
+    #
+    # VAL:
+    #   [761:951] = 190 crosslines
+    #
+    # Важно:
+    # два train-региона сохраняются в РАЗНЫХ H5,
+    # чтобы SliceBuilder не считал их соседними.
+
+        train_idx_1 = np.arange(
+            0,
+            310
+        )
+
+        train_idx_2 = np.arange(
+            452,
+            761
+        )
+
+        test_idx = np.arange(
+            310,
+            452
+        )
+
+        val_idx = np.arange(
+            761,
+            951
+        )
+
+        print()
+        print("=" * 70)
+        print("E5 SPATIAL SPLIT")
+        print("=" * 70)
+
+        print(
+            f"Train 1: {len(train_idx_1)} "
+            f"[0:310]"
+        )
+
+        print(
+            f"Test:    {len(test_idx)} "
+            f"[310:452]"
+        )
+
+        print(
+            f"Train 2: {len(train_idx_2)} "
+            f"[452:761]"
+        )
+
+        print(
+            f"Val:     {len(val_idx)} "
+            f"[761:951]"
+        )
+
+        print()
+        print(
+            f"Total train: "
+            f"{len(train_idx_1) + len(train_idx_2)}"
+        )
 
 
     elif args.split == 'random':
@@ -373,37 +442,180 @@ def main():
         args.temp_dir = os.path.join(
             args.temp_dir,
             'random'
-            )
+        )
+    elif args.split == 'e5':
+
+        args.temp_dir = os.path.join(
+            args.temp_dir,
+            'e5'
+        )
     else:
         args.temp_dir = os.path.join(
-             args.temp_dir,
+            args.temp_dir,
             'spatial'
-            )
+        )
+
+    os.makedirs(
+        args.temp_dir,
+        exist_ok=True
+    )
     # Сохраняем временные train и val
-    train_path = os.path.join(args.temp_dir, 'train.h5')
-    val_path = os.path.join(args.temp_dir, 'val.h5')
-    test_path = os.path.join(args.temp_dir, 'test.h5')
-    with h5py.File(train_path, 'w') as f:
-        f.create_dataset('raw', data=raw[train_idx], compression='gzip')
-        f.create_dataset('label', data=label[train_idx], compression='gzip')
-    with h5py.File(val_path, 'w') as f:
-        f.create_dataset('raw', data=raw[val_idx], compression='gzip')
-        f.create_dataset('label', data=label[val_idx], compression='gzip')
-    
-    with h5py.File(test_path, 'w') as f:
-        f.create_dataset('raw', data=raw[test_idx], compression='gzip')
-        f.create_dataset('label', data=label[test_idx], compression='gzip')
+    if args.split == 'e5':
+
+        train_path_1 = os.path.join(
+            args.temp_dir,
+            'train_1.h5'
+        )
+
+        train_path_2 = os.path.join(
+            args.temp_dir,
+            'train_2.h5'
+        )
+
+        train_paths = [
+            train_path_1,
+            train_path_2
+        ]
+
+        with h5py.File(
+            train_path_1,
+            'w'
+        ) as f:
+
+            f.create_dataset(
+                'raw',
+                data=raw[train_idx_1],
+                compression='gzip'
+            )
+
+            f.create_dataset(
+                'label',
+                data=label[train_idx_1],
+                compression='gzip'
+            )
+
+        with h5py.File(
+            train_path_2,
+            'w'
+        ) as f:
+
+            f.create_dataset(
+                'raw',
+                data=raw[train_idx_2],
+                compression='gzip'
+            )
+
+            f.create_dataset(
+                'label',
+                data=label[train_idx_2],
+                compression='gzip'
+            )
+
+    else:
+
+        train_path = os.path.join(
+            args.temp_dir,
+            'train.h5'
+        )
+
+        train_paths = [
+            train_path
+        ]
+
+        with h5py.File(
+            train_path,
+            'w'
+        ) as f:
+
+            f.create_dataset(
+                'raw',
+                data=raw[train_idx],
+                compression='gzip'
+            )
+
+            f.create_dataset(
+                'label',
+                data=label[train_idx],
+                compression='gzip'
+            )
+
+
+    val_path = os.path.join(
+        args.temp_dir,
+        'val.h5'
+    )
+
+    test_path = os.path.join(
+        args.temp_dir,
+        'test.h5'
+    )
+
+    with h5py.File(
+        val_path,
+        'w'
+    ) as f:
+
+        f.create_dataset(
+            'raw',
+            data=raw[val_idx],
+            compression='gzip'
+        )
+
+        f.create_dataset(
+            'label',
+            data=label[val_idx],
+            compression='gzip'
+        )
+
+
+    with h5py.File(
+        test_path,
+        'w'
+    ) as f:
+
+        f.create_dataset(
+            'raw',
+            data=raw[test_idx],
+            compression='gzip'
+        )
+
+        f.create_dataset(
+            'label',
+            data=label[test_idx],
+            compression='gzip'
+        )
 
 
     # Веса классов
     class_weights_list = None
     if args.class_weights and args.loss in ['CrossEntropyLoss', 'DiceCrossEntropyLoss']:
+
         print("Вычисление весов классов...")
-        with h5py.File(train_path, 'r') as f:
-            train_labels = f['label'][:]
-        class_weights_list = compute_class_weights(train_labels, args.n_classes)
+
+        train_labels_list = []
+
+        for path in train_paths:
+
+            with h5py.File(path, 'r') as f:
+                train_labels_list.append(
+                    f['label'][:]
+                )
+
+        train_labels = np.concatenate(
+            train_labels_list,
+            axis=0
+        )
+
+        class_weights_list = compute_class_weights(
+            train_labels,
+            args.n_classes
+        )
+
         print("Веса:", class_weights_list)
+
         del train_labels
+        del train_labels_list
+
         gc.collect()
 
     # Генерация конфига и запуск
@@ -411,7 +623,7 @@ def main():
     del raw
     del label
     gc.collect()
-    config_path = generate_config(args, train_path, val_path, class_weights_list)
+    config_path = generate_config(args, train_paths, val_path, class_weights_list)
     print(f"Конфиг сохранён: {config_path}")
     
     # Запуск через Python-модуль

@@ -47,7 +47,7 @@ def parse_args():
 
     parser.add_argument(
         "--checkpoint",
-        default="./my_models/best_checkpoint_no_aug.pytorch",
+        default="./my_models/best_checkpoint_depth.pytorch",
         help="Path to checkpoint.pytorch"
     )
 
@@ -551,80 +551,80 @@ def main():
     # Здесь используем только raw + label.
     # Никаких random augmentations.
 
-if args.absolute_depth:
+    if args.absolute_depth:
 
-    dataset = LazyHDF5DatasetWithDepth(
-        file_path=args.h5,
-        phase="test",
-        slice_builder_config={
-            "name": "SliceBuilder",
-            "ndim": 3,
-            "patch_shape": [
-                16,
-                128,
-                128
-            ],
-            "stride_shape": [
-                8,
-                64,
-                64
-            ]
-        },
-        transformer_config={
-            "raw": [
-                {
-                    "name": "ToTensor",
-                    "expand_dims": False
-                }
-            ],
-            "label": [
-                {
-                    "name": "ToTensor",
-                    "dtype": "long",
-                    "expand_dims": False
-                }
-            ]
-        }
-    )
+        dataset = LazyHDF5DatasetWithDepth(
+            file_path=args.h5,
+            phase="test",
+            slice_builder_config={
+                "name": "SliceBuilder",
+                "ndim": 3,
+                "patch_shape": [
+                    16,
+                    128,
+                    128
+                ],
+                "stride_shape": [
+                    8,
+                    64,
+                    64
+                ]
+            },
+            transformer_config={
+                "raw": [
+                    {
+                        "name": "ToTensor",
+                        "expand_dims": False
+                    }
+                ],
+                "label": [
+                    {
+                        "name": "ToTensor",
+                        "dtype": "long",
+                        "expand_dims": False
+                    }
+                ]
+            }
+        )
 
-else:
+    else:
 
-    dataset = StandardHDF5Dataset(
-        file_path=args.h5,
-        phase="test",
-        slice_builder_config={
-            "name": "SliceBuilder",
-            "ndim": 3,
-            "patch_shape": [
-                16,
-                128,
-                128
-            ],
-            "stride_shape": [
-                8,
-                64,
-                64
-            ]
-        },
-        transformer_config={
-            "label": [
-                {
-                    "name": "ToTensor",
-                    "dtype": "long",
-                    "expand_dims": False
-                }
-            ],
-            "raw": [
-                {
-                    "name": "Normalize"
-                },
-                {
-                    "name": "ToTensor",
-                    "expand_dims": True
-                }
-            ]
-        }
-    )
+        dataset = StandardHDF5Dataset(
+            file_path=args.h5,
+            phase="test",
+            slice_builder_config={
+                "name": "SliceBuilder",
+                "ndim": 3,
+                "patch_shape": [
+                    16,
+                    128,
+                    128
+                ],
+                "stride_shape": [
+                    8,
+                    64,
+                    64
+                ]
+            },
+            transformer_config={
+                "label": [
+                    {
+                        "name": "ToTensor",
+                        "dtype": "long",
+                        "expand_dims": False
+                    }
+                ],
+                "raw": [
+                    {
+                        "name": "Normalize"
+                    },
+                    {
+                        "name": "ToTensor",
+                        "expand_dims": True
+                    }
+                ]
+            }
+        )
 
     loader = DataLoader(
         dataset,
@@ -724,7 +724,7 @@ else:
             # [B, C, D, H, W]
 
             if input_tensor.ndim == 4:
-                input_tensor = input_tensor.unsqueeze(1)
+                input_tensor = input_tensor.unsqueeze(0)
 
             input_tensor = input_tensor.to(
                 device,
