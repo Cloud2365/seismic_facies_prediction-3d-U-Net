@@ -47,7 +47,7 @@ def parse_args():
 
     parser.add_argument(
         "--checkpoint",
-        default="./my_models/best_checkpoint_depth.pytorch",
+        default="./my_models/best_checkpoint_new_split.pytorch",
         help="Path to checkpoint.pytorch"
     )
 
@@ -921,8 +921,54 @@ def main():
 
     confidence = averaged.max(axis=0).astype(np.float16)
 
-    prob = np.clip(averaged, 1e-8, 1.0)
-    entropy = ( -(prob * np.log(prob)).sum(axis=0)).astype(np.float16)
+    entropy = np.zeros(
+        averaged.shape[1:],
+        dtype=np.float32
+    )
+
+    buffer = np.empty(
+        averaged.shape[1:],
+        dtype=np.float32
+    )
+
+    for class_id in range(averaged.shape[0]):
+
+        p = averaged[class_id]
+
+        # clip(p, 1e-8, 1.0) без создания отдельного массива
+        np.maximum(
+            p,
+            1e-8,
+            out=buffer
+        )
+
+        np.minimum(
+            buffer,
+            1.0,
+            out=buffer
+        )
+
+        # buffer = log(p)
+        np.log(
+            buffer,
+            out=buffer
+        )
+
+        # buffer = p * log(p)
+        np.multiply(
+            p,
+            buffer,
+            out=buffer
+        )
+
+        # H = -sum(p * log(p))
+        entropy -= buffer
+
+    entropy = entropy.astype(
+        np.float16
+    )
+
+    del buffer
 
     # --------------------------------------------------------
     # VOLUME-LEVEL CONFUSION MATRIX

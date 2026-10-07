@@ -173,7 +173,7 @@ def generate_config(args, train_paths, val_path, class_weights=None):
 def main():
     parser = argparse.ArgumentParser(description='3D U-Net training with dynamic split')
     parser.add_argument('--data_h5', type=str,
-                        default='/content/collab_project/pytorch-3dunet-master/my_data/all_data.h5',
+                        default='E:/Projects/AI_Oil_Gas/collab_project/pytorch-3dunet-master/my_data/all_data.h5',
                         help='Path to all_data.h5')
     parser.add_argument('--per_val', type=float, default=0.15,
                         help='Fraction for validation (from remaining after test)')
@@ -218,10 +218,10 @@ def main():
     parser.add_argument('--class_weights', action='store_true',
                         help='Compute and use class weights (only for CrossEntropyLoss)')
                         
-    parser.add_argument('--checkpoint_dir', type=str, default='/content/checkpoints')
-    parser.add_argument('--log_dir', type=str, default='/content/logs')
-    parser.add_argument('--config_dir', type=str, default='/content/my_configs')
-    parser.add_argument('--temp_dir', type=str, default='/content/temp_splits')
+    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints')
+    parser.add_argument('--log_dir', type=str, default='logs')
+    parser.add_argument('--config_dir', type=str, default='my_configs')
+    parser.add_argument('--temp_dir', type=str, default='temp_splits')
     parser.add_argument('--resume', type=str, default=None,
                     help='Path to checkpoint to resume training from')
     args = parser.parse_args()
