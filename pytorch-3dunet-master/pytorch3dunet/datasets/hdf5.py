@@ -373,12 +373,12 @@ class LazyHDF5DatasetWithDepth(LazyHDF5Dataset):
         if len(idx) == 4:
             idx = idx[1:]
 
-        z_slice = idx[0]
+        y_slice = idx[1]
 
-        z_start = z_slice.start
-        z_stop = z_slice.stop
+        y_start = y_slice.start
+        y_stop = y_slice.stop
 
-        total_depth = self.volume_shape[0]
+        total_depth = self.volume_shape[1]
 
         # Global absolute depth in [-1, 1]
         depth_values = np.linspace(
@@ -389,11 +389,11 @@ class LazyHDF5DatasetWithDepth(LazyHDF5Dataset):
         )
 
         depth_values = depth_values[
-            z_start:z_stop
+            y_start:y_stop
         ]
 
         depth_channel = depth_values[
-            :, None, None
+            None, :, None
         ]
 
         depth_channel = np.broadcast_to(
