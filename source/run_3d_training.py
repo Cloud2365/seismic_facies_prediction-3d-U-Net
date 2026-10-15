@@ -27,7 +27,7 @@ def parse_args():
     )
     parser.add_argument("--train_h5", type=str, default=None, help="Готовый train.h5, только для --split ready")
     parser.add_argument("--val_h5", type=str, default=None, help="Готовый val.h5, только для --split ready")
-    parser.add_argument("--per_val", type=float, default=0.15)
+    parser.add_argument("--per_val", type=float, default=0.2)
     parser.add_argument("--per_test", type=float, default=0.15)
     parser.add_argument("--arch", type=str, default="UNet3D", choices=["UNet3D", "ResidualUNet3D", "ResidualUNetSE3D"])
     parser.add_argument("--split", type=str, default="spatial", choices=["spatial", "random", "e5", "ready"])

@@ -19,6 +19,8 @@ temp_splits/
 
 # Графики и визуализации
 source/train_logs/
+source/spatial_shift_diagnostics/
+source/baseline_diagnostics/
 
 # Временные конфиги (генерируются автоматически)
 source/my_configs/generated_config.yaml
@@ -27,6 +29,7 @@ source/my_configs/generated_config.yaml
 source/show_seismic_and_mask.py
 source/show_test_result.py
 source/test.py
+source/make_visualizations.py 
 # Обученные модели и чекпоинты
 *.pytorch
 *.pkl
