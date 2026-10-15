@@ -26,9 +26,7 @@ import numpy as np
 def iter_patch_starts(size: int, patch: int, stride: int) -> list[int]:
     """Same index generation as pytorch3dunet SliceBuilder._gen_indices."""
     if size < patch:
-        raise ValueError(
-            f"Volume size {size} is smaller than patch size {patch}"
-        )
+        raise ValueError(f"Volume size {size} is smaller than patch size {patch}")
     starts = list(range(0, size - patch + 1, stride))
     last = starts[-1]
     if last + patch < size:
@@ -76,9 +74,7 @@ def spatial_slice_from_index(index) -> tuple[slice, slice, slice]:
     if isinstance(index, (list, tuple)) and len(index) == 4:
         index = index[1:]
     if len(index) != 3:
-        raise ValueError(
-            f"Expected a 3D spatial index (D, H, W), got {index!r}"
-        )
+        raise ValueError(f"Expected a 3D spatial index (D, H, W), got {index!r}")
     return tuple(index)
 
 
@@ -91,9 +87,7 @@ class VolumeAccumulator:
 
     def __init__(self, volume_shape: tuple[int, int, int], n_classes: int):
         if len(volume_shape) != 3:
-            raise ValueError(
-                f"volume_shape must be (D, H, W), got {volume_shape}"
-            )
+            raise ValueError(f"volume_shape must be (D, H, W), got {volume_shape}")
         if n_classes < 2:
             raise ValueError(f"n_classes must be >= 2, got {n_classes}")
         self.volume_shape = tuple(int(x) for x in volume_shape)
@@ -110,13 +104,11 @@ class VolumeAccumulator:
         values = np.asarray(values)
         if values.ndim != 4:
             raise ValueError(
-                "Patch values must be [C, D, H, W], "
-                f"got shape {values.shape}"
+                "Patch values must be [C, D, H, W], " f"got shape {values.shape}"
             )
         if values.shape[0] != self.n_classes:
             raise ValueError(
-                f"Patch has {values.shape[0]} channels, "
-                f"expected {self.n_classes}"
+                f"Patch has {values.shape[0]} channels, " f"expected {self.n_classes}"
             )
         dest = self.prediction_sum[(slice(None),) + spatial_slice]
         if dest.shape[1:] != values.shape[1:]:
@@ -160,7 +152,11 @@ class VolumeAccumulator:
                 f"{self.prediction_count.shape} != volume {self.volume_shape}"
             )
 
-        if expected_count is None and patch_shape is not None and stride_shape is not None:
+        if (
+            expected_count is None
+            and patch_shape is not None
+            and stride_shape is not None
+        ):
             expected_count = expected_overlap_count(
                 self.volume_shape, patch_shape, stride_shape
             )
@@ -260,9 +256,7 @@ def metrics_from_confusion(
     precision = np.divide(
         tp, tp + fp, out=np.full(n_classes, np.nan), where=(tp + fp) > 0
     )
-    recall = np.divide(
-        tp, tp + fn, out=np.full(n_classes, np.nan), where=(tp + fn) > 0
-    )
+    recall = np.divide(tp, tp + fn, out=np.full(n_classes, np.nan), where=(tp + fn) > 0)
     f1 = np.divide(
         2 * precision * recall,
         precision + recall,
