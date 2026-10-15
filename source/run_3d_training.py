@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument("--per_val", type=float, default=0.2)
     parser.add_argument("--per_test", type=float, default=0.15)
     parser.add_argument("--arch", type=str, default="UNet3D", choices=["UNet3D", "ResidualUNet3D", "ResidualUNetSE3D"])
-    parser.add_argument("--split", type=str, default="spatial", choices=["spatial", "random", "e5", "ready"])
+    parser.add_argument("--split", type=str, default="spatial", choices=["spatial", "random", "e5", "reverse", "ready"])
     parser.add_argument("--n_classes", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--f_maps", type=int, default=32)
@@ -235,6 +235,21 @@ def make_indices(split, n, per_val, per_test, seed):
         print(f"Train 2: {len(train[1])} [452:761]")
         print(f"Val:     {len(val)} [761:951]")
         print(f"Total train: {len(train[0]) + len(train[1])}")
+        return train, val, test
+
+    if split == "reverse":
+        if n != 951:
+            raise ValueError(
+                f"Reverse split рассчитан на 951 срез, сейчас {n}. "
+                "Не запускайте его на объёме другой длины без пересмотра диапазонов."
+            )
+        test = np.arange(0, 142)
+        val = np.arange(142, 332)
+        train = [np.arange(332, 951)]
+        print("REVERSE SPATIAL SPLIT")
+        print(f"Test:  {len(test)} [0:142]")
+        print(f"Val:   {len(val)} [142:332]")
+        print(f"Train: {len(train[0])} [332:951]")
         return train, val, test
 
     if split == "random":
