@@ -1,15 +1,21 @@
+import argparse
 import os
 import numpy as np
 import h5py
 from PIL import Image
 import re
 
-# ===== НАСТРОЙКИ =====
-DATA_DIR = r"E:\Projects\AI_Oil_Gas\seismic_facies_prediction\data\row"
-CROSSLINE_DIR = os.path.join(DATA_DIR, "crosslines")
-MASK_DIR = os.path.join(DATA_DIR, "masks")
-OUTPUT_DIR = r"E:\Projects\AI_Oil_Gas\collab_project\pytorch-3dunet-master\my_data"
-# =======================
+# Пути задаются аргументами командной строки (см. parse_args); значения ниже
+# заполняются в __main__.
+CROSSLINE_DIR = None
+MASK_DIR = None
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Сборка all_data.h5 из crossline TIFF и масок PNG")
+    parser.add_argument("--data_dir", required=True, help="Папка с подпапками crosslines/ и masks/")
+    parser.add_argument("--output_dir", required=True, help="Куда записать all_data.h5")
+    return parser.parse_args()
 
 def get_number_from_filename(filename, pattern):
     """Извлекает номер из имени файла по шаблону."""
@@ -47,9 +53,17 @@ def load_crossline_data():
         return np.array([]), np.array([])
     
     crossline_nums = [get_number_from_filename(f, r"crossline_(\d+)") for f in crossline_files]
+    if len(set(crossline_nums)) != len(crossline_nums):
+        raise ValueError("Повторяющиеся номера crossline в именах файлов")
     mask_nums = [get_number_from_filename(f, r"crossline_(\d+)") for f in mask_files]
     
     common_nums = sorted(set(crossline_nums) & set(mask_nums))
+    unpaired = sorted(set(crossline_nums) ^ set(mask_nums))
+    if unpaired:
+        print(f"ВНИМАНИЕ: {len(unpaired)} crossline без пары (сейсмика или маска), например: {unpaired[:10]}")
+    if common_nums and common_nums[-1] - common_nums[0] + 1 != len(common_nums):
+        print("ВНИМАНИЕ: номера crossline идут с пропусками; индексы split в run_3d_training.py "
+              "будут относиться к позициям в кубе, а не к номерам crossline")
     print(f"Совпадающих номеров: {len(common_nums)}")
     
     if len(common_nums) == 0:
@@ -70,8 +84,8 @@ def load_crossline_data():
         try:
             seismic = np.array(Image.open(crossline_path), dtype=np.float32)
         except Exception as e:
-            print(f"Ошибка при загрузке {crossline_path}: {e}")
-            continue
+            # Пропуск среза молча сдвинул бы все индексы split ([0:619], [809:951] ...)
+            raise RuntimeError(f"Ошибка при загрузке {crossline_path}: {e}") from e
 
         if seismic.ndim == 3:
             seismic = seismic[:, :, 0]
@@ -81,8 +95,7 @@ def load_crossline_data():
         try:
             mask = np.array(Image.open(mask_path), dtype=np.int64)
         except Exception as e:
-            print(f"Ошибка при загрузке {mask_path}: {e}")
-            continue
+            raise RuntimeError(f"Ошибка при загрузке {mask_path}: {e}") from e
 
         if mask.ndim == 3:
             mask = mask[:, :, 0]
@@ -115,6 +128,10 @@ def load_crossline_data():
     return seismic_volume, mask_volume
 
 if __name__ == "__main__":
+    args = parse_args()
+    CROSSLINE_DIR = os.path.join(args.data_dir, "crosslines")
+    MASK_DIR = os.path.join(args.data_dir, "masks")
+    OUTPUT_DIR = args.output_dir
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     print("Начинаю загрузку данных (кросслайны)...")

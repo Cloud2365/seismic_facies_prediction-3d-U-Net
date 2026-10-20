@@ -20,10 +20,10 @@ temp_splits/
 # Графики и визуализации
 source/train_logs/
 source/spatial_shift_diagnostics/
-source/baseline_diagnostics/
+# source/baseline_diagnostics/ хранится в репозитории (скрипт + сводки)
 
 # Временные конфиги (генерируются автоматически)
-source/my_configs/generated_config.yaml
+source/my_configs/generated_config*.yaml
 
 # Скрипты для визуализации (если не нужны в репозитории)
 source/show_seismic_and_mask.py

@@ -4,6 +4,8 @@ import os
 import subprocess
 import sys
 
+import shutil
+
 import h5py
 import numpy as np
 import yaml
@@ -17,13 +19,41 @@ def compute_class_weights(labels, n_classes):
     return weights.tolist()
 
 
+def train_amplitude_range(paths, low_pct=0.5, high_pct=99.5, max_samples=5_000_000, seed=0):
+    """Global amplitude range estimated on the TRAIN volumes only.
+
+    Percentiles instead of min/max: a single strong reflector must not compress the rest of
+    the signal. The same fixed range is used for train, val and test, so a voxel gets the
+    same normalized value in every patch that covers it.
+    """
+    rng = np.random.default_rng(seed)
+    sizes = []
+    for path in paths:
+        with h5py.File(path, "r") as f:
+            sizes.append(int(np.prod(f["raw"].shape)))
+    total = sum(sizes)
+    samples = []
+    for path, size in zip(paths, sizes):
+        with h5py.File(path, "r") as f:
+            raw = f["raw"][:].reshape(-1)
+        take = min(size, max(1, int(max_samples * size / total)))
+        idx = rng.choice(size, size=take, replace=False) if take < size else slice(None)
+        samples.append(np.asarray(raw[idx], dtype=np.float64))
+        del raw
+    values = np.concatenate(samples)
+    low, high = np.percentile(values, [low_pct, high_pct])
+    if not high > low:
+        raise ValueError(f"Degenerate amplitude range: [{low}, {high}]")
+    return float(low), float(high)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="3D U-Net training with dynamic split")
     parser.add_argument(
         "--data_h5",
         type=str,
-        default="E:/Projects/AI_Oil_Gas/collab_project/pytorch-3dunet-master/my_data/all_data.h5",
-        help="Один куб all_data.h5. Не используется при --split ready",
+        default=None,
+        help="Один куб all_data.h5 (обязателен для всех split, кроме ready)",
     )
     parser.add_argument("--train_h5", type=str, default=None, help="Готовый train.h5, только для --split ready")
     parser.add_argument("--val_h5", type=str, default=None, help="Готовый val.h5, только для --split ready")
@@ -37,7 +67,22 @@ def parse_args():
     parser.add_argument("--n_epoch", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--lr", type=float, default=0.0001)
-    parser.add_argument("--early_stop", type=int, default=10)
+    parser.add_argument(
+        "--early_stop",
+        type=int,
+        default=10,
+        help="Остановка после N эпох без улучшения val-метрики; 0 отключает",
+    )
+    parser.add_argument(
+        "--norm",
+        type=str,
+        default="global",
+        choices=["global", "patch"],
+        help="global: фиксированный диапазон амплитуд по перцентилям train (по умолчанию); "
+        "patch: старый min-max по каждому патчу (для воспроизведения прежних результатов)",
+    )
+    parser.add_argument("--norm_low_pct", type=float, default=0.5)
+    parser.add_argument("--norm_high_pct", type=float, default=99.5)
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--patch_shape", type=int, nargs=3, default=[16, 128, 128])
     parser.add_argument("--stride_shape", type=int, nargs=3, default=[8, 64, 64])
@@ -66,9 +111,21 @@ def _tensor(expand_dims, dtype=None):
     return item
 
 
-def generate_config(args, train_paths, val_path, class_weights=None):
-    raw_train = [] if args.absolute_depth else [{"name": "Normalize"}]
-    raw_val = [] if args.absolute_depth else [{"name": "Normalize"}, _tensor(True)]
+def _normalize_transform(amp_range):
+    if amp_range is None:
+        return {"name": "Normalize"}  # per-patch min-max (legacy)
+    return {"name": "Normalize", "min_value": amp_range[0], "max_value": amp_range[1]}
+
+
+def config_path_for(args):
+    return os.path.join(args.config_dir, f"generated_config_{args.split}.yaml")
+
+
+def generate_config(args, train_paths, val_path, class_weights=None, amp_range=None):
+    # Normalization is the same transform in both modes. With --absolute_depth the dataset
+    # appends the depth channel after the transforms, so it is not normalized or rotated.
+    raw_train = [_normalize_transform(amp_range)]
+    raw_val = [_normalize_transform(amp_range), _tensor(True)]
     label_train = []
     label_val = [_tensor(False, "long")]
 
@@ -138,6 +195,7 @@ def generate_config(args, train_paths, val_path, class_weights=None):
             "max_num_iterations": None,
             "max_num_epochs": args.n_epoch,
             "resume": args.resume,
+            "patience": args.early_stop,
         },
         "eval_metric": {
             "name": "SegmentationMetrics",
@@ -147,15 +205,26 @@ def generate_config(args, train_paths, val_path, class_weights=None):
             "log_dir": args.log_dir,
             "tensorboard": True,
         },
+        # Not used by pytorch3dunet; kept so that every checkpoint has a full record of the run
+        "experiment": {
+            "split": args.split,
+            "norm": args.norm,
+            "amplitude_range": list(amp_range) if amp_range is not None else None,
+            "absolute_depth": bool(args.absolute_depth),
+            "aug": bool(args.aug),
+        },
     }
 
     if args.loss in ("CrossEntropyLoss", "DiceCrossEntropyLoss") and args.class_weights and class_weights is not None:
         config["loss"]["weight"] = class_weights
 
     os.makedirs(args.config_dir, exist_ok=True)
-    config_path = os.path.join(args.config_dir, "generated_config.yaml")
+    config_path = config_path_for(args)
     with open(config_path, "w", encoding="utf-8") as f:
         yaml.dump(config, f, default_flow_style=False)
+    # A copy next to the checkpoints: the test script can always find the config of a model
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    shutil.copyfile(config_path, os.path.join(args.checkpoint_dir, "config.yaml"))
     return config_path
 
 
@@ -178,7 +247,11 @@ def class_weights_from_files(paths, n_classes):
 
 
 def launch(args, train_paths, val_path, class_weights=None):
-    config_path = generate_config(args, train_paths, val_path, class_weights)
+    amp_range = None
+    if args.norm == "global":
+        amp_range = train_amplitude_range(train_paths, args.norm_low_pct, args.norm_high_pct, seed=args.seed)
+        print(f"Диапазон амплитуд по train (p{args.norm_low_pct}..p{args.norm_high_pct}): {amp_range}")
+    config_path = generate_config(args, train_paths, val_path, class_weights, amp_range)
     print(f"Конфиг сохранён: {config_path}")
     cmd = [sys.executable, "-m", "pytorch3dunet.train", "--config", config_path]
     if args.resume:
@@ -272,6 +345,10 @@ def make_indices(split, n, per_val, per_test, seed):
 
 
 def run_from_cube(args):
+    if not args.data_h5:
+        raise ValueError("Укажите --data_h5 (путь к all_data.h5)")
+    if not os.path.isfile(args.data_h5):
+        raise FileNotFoundError(args.data_h5)
     print(f"Загрузка {args.data_h5} ...")
     with h5py.File(args.data_h5, "r") as f:
         raw = f["raw"][:]

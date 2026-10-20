@@ -146,8 +146,12 @@ class UNetTrainer:
         pre_trained=None,
         max_val_images=4,
         device: TorchDevice | None = None,
+        patience: int | None = None,
     ):
         self.max_val_images = max_val_images
+        # Early stopping: stop after `patience` validations without improvement (None/0 disables it)
+        self.patience = patience if patience and patience > 0 else None
+        self.epochs_without_improvement = 0
         self.model = model
         self.optimizer = optimizer
         self.scheduler = lr_scheduler
@@ -261,6 +265,19 @@ class UNetTrainer:
             self._save_checkpoint(is_best)
 
             self.num_epochs += 1
+
+            if is_best:
+                self.epochs_without_improvement = 0
+            else:
+                self.epochs_without_improvement += 1
+            if self.patience is not None and self.epochs_without_improvement >= self.patience:
+                logger.info(
+                    f"Early stopping: no improvement for {self.epochs_without_improvement} epochs "
+                    f"(patience={self.patience}). Best eval score: {self.best_eval_score}"
+                )
+                break
+            if self.should_stop():
+                break
 
         logger.info(f"Reached maximum number of epochs: {self.max_num_epochs}")
         if self.tb_drive_writer is not None:

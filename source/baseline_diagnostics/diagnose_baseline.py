@@ -7,12 +7,17 @@ import io
 import json
 from pathlib import Path
 
+import sys
+
 import numpy as np
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # source/
+from volume_inference import confusion_from_volumes, metrics_from_confusion  # noqa: E402
 
 
 CLASSES = (3, 4, 5, 6)
@@ -562,6 +567,9 @@ def main() -> None:
     q1 = q_summary[0]
     q4 = q_summary[-1]
 
+    n_classes = int(max(pred.max(), gt.max())) + 1
+    volume_metrics = metrics_from_confusion(confusion_from_volumes(gt, pred, n_classes))
+
     def corr(a, b):
         m = np.isfinite(a) & np.isfinite(b)
         if m.sum() < 3:
@@ -573,7 +581,11 @@ def main() -> None:
         "survey_test_split": [809, 951],
         "n_voxels": int(pred.size),
         "overall_error": float((pred != gt).mean()),
-        "official_volume_miou_no_bg": 0.5884245804616746,
+        # computed from the volumes being diagnosed, not copied from an older run
+        "official_volume_miou_no_bg": float(volume_metrics["mean_iou_no_background"]),
+        "pixel_accuracy": float(volume_metrics["pixel_accuracy"]),
+        "prediction_count_max": int(count.max()),
+        "prediction_count_mean": float(count.mean()),
         "crossline": {
             "iou_first_half": iou_first,
             "iou_second_half": iou_last,
@@ -668,7 +680,7 @@ def write_readme(out: Path, summary, iou_first, iou_last, q1, q4, low, interior,
 Input volumes: `source/test_logs_volume/{{prediction_volume,ground_truth_volume,prediction_count}}.npy`
 
 Volume shape: `{summary['volume_shape']}` (test split survey crosslines 809–950).
-Official baseline mIoU without background: **0.58842**. Pixel error on the reconstructed volume: **{f(summary['overall_error'])}**.
+Volume mIoU without background (computed from these volumes): **{f(summary['official_volume_miou_no_bg'])}**. Pixel error on the reconstructed volume: **{f(summary['overall_error'])}**.
 
 This folder is produced by `source/diagnose_baseline.py` (CPU-only). The model, checkpoint, loss, split, patch and stride were not changed.
 

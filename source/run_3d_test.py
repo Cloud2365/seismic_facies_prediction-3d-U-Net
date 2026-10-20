@@ -31,6 +31,7 @@ from pytorch3dunet.datasets.hdf5 import (
     StandardHDF5Dataset,
     LazyHDF5DatasetWithDepth,
 )
+from monotonic_decode import monotonic_decode
 from pytorch3dunet.unet3d.model import get_model
 from pytorch3dunet.unet3d.config import load_config
 
@@ -61,10 +62,15 @@ def parse_args():
         help="Path to training YAML config",
     )
 
-    parser.add_argument("--n_classes", type=int, default=10, help="Number of classes")
+    parser.add_argument(
+        "--n_classes",
+        type=int,
+        default=None,
+        help="Number of classes (default: model.out_channels from the config)",
+    )
 
     parser.add_argument(
-        "--batch_size", type=int, default=1, help="Batch size for testing"
+        "--batch_size", type=int, default=4, help="Batch size for testing"
     )
 
     parser.add_argument(
@@ -86,7 +92,15 @@ def parse_args():
     parser.add_argument(
         "--absolute_depth",
         action="store_true",
-        help="Use normalized absolute depth as a second input channel",
+        help="Deprecated: detected automatically from the config "
+        "(loaders.dataset / model.in_channels). Kept for old command lines.",
+    )
+    parser.add_argument(
+        "--monotonic",
+        action="store_true",
+        help="Also decode labels so that they never decrease with depth on every trace "
+        "(classes 0..9 are stratigraphically ordered top to bottom). "
+        "Metrics are reported for both plain argmax and monotonic decoding.",
     )
 
     return parser.parse_args()
@@ -282,6 +296,36 @@ def print_confusion_matrix(cm, n_classes):
 
 
 # ============================================================
+# DATASET HELPERS
+# ============================================================
+
+
+def test_raw_transforms(val_raw_cfg, use_depth):
+    """Raw transforms for the test: the validation transforms of the training config.
+
+    Only deterministic transforms are kept. Old configs are handled for compatibility:
+      * a 1-channel config without Normalize keeps the old hard-coded per-patch Normalize;
+      * a depth config without Normalize falls back to per-patch normalization inside
+        LazyHDF5DatasetWithDepth (exactly what those checkpoints were trained with).
+    """
+    allowed = {"Normalize", "Standardize", "PercentileNormalizer", "ToTensor"}
+    transforms = [dict(t) for t in val_raw_cfg if t.get("name") in allowed]
+    names = [t["name"] for t in transforms]
+    if not use_depth and not ({"Normalize", "Standardize", "PercentileNormalizer"} & set(names)):
+        transforms.insert(0, {"name": "Normalize"})
+    transforms = [t for t in transforms if t["name"] != "ToTensor"]
+    transforms.append({"name": "ToTensor", "expand_dims": True})
+    return transforms
+
+
+def collate_test_batch(batch):
+    """Stack patches; keep slice indices as a plain list (default_collate cannot batch slices)."""
+    raws = [torch.as_tensor(item[0]) for item in batch]
+    raws = [r.unsqueeze(0) if r.ndim == 3 else r for r in raws]
+    return torch.stack(raws, dim=0), [item[1] for item in batch]
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -300,8 +344,6 @@ def main():
     print(f"Test H5    : {args.h5}")
 
     print(f"Config     : {args.config}")
-
-    print(f"Classes    : {args.n_classes}")
 
     print(f"Batch size : {args.batch_size}")
 
@@ -337,6 +379,15 @@ def main():
     finally:
 
         sys.argv = old_argv
+
+    if args.n_classes is None:
+        args.n_classes = int(config["model"]["out_channels"])
+    elif args.n_classes != int(config["model"]["out_channels"]):
+        raise ValueError(
+            f"--n_classes={args.n_classes} does not match model.out_channels="
+            f"{config['model']['out_channels']} in {args.config}"
+        )
+    print(f"Classes    : {args.n_classes}")
 
     # --------------------------------------------------------
     # LOAD MODEL
@@ -390,60 +441,55 @@ def main():
             raise RuntimeError("Dataset 'label' not found in HDF5.")
 
     # --------------------------------------------------------
-    # DATASET
+    # DATASET (everything is taken from the training config)
     # --------------------------------------------------------
 
     print()
     print("Creating test dataset...")
 
-    # ВАЖНО:
-    # Здесь используем только raw + label.
-    # Никаких random augmentations.
+    loaders_cfg = config["loaders"]
+    val_cfg = loaders_cfg["val"]
+    patch_shape = tuple(val_cfg["slice_builder"]["patch_shape"])
+    stride_shape = tuple(val_cfg["slice_builder"]["stride_shape"])
+    use_depth = (
+        loaders_cfg.get("dataset") == "LazyHDF5DatasetWithDepth"
+        or config["model"].get("in_channels", 1) == 2
+    )
+    if args.absolute_depth and not use_depth:
+        raise ValueError("--absolute_depth given, but the config describes a 1-channel model")
 
-    if args.absolute_depth:
+    raw_transforms = test_raw_transforms(val_cfg["transformer"]["raw"], use_depth)
+    transformer_config = {
+        "raw": raw_transforms,
+        "label": [{"name": "ToTensor", "dtype": "long", "expand_dims": False}],
+    }
+    slice_builder_config = {
+        "name": "SliceBuilder",
+        "ndim": 3,
+        "patch_shape": list(patch_shape),
+        "stride_shape": list(stride_shape),
+    }
 
-        dataset = LazyHDF5DatasetWithDepth(
-            file_path=args.h5,
-            phase="test",
-            slice_builder_config={
-                "name": "SliceBuilder",
-                "ndim": 3,
-                "patch_shape": [16, 128, 128],
-                "stride_shape": [8, 64, 64],
-            },
-            transformer_config={
-                "raw": [{"name": "ToTensor", "expand_dims": False}],
-                "label": [{"name": "ToTensor", "dtype": "long", "expand_dims": False}],
-            },
-        )
+    print(f"Patch shape : {patch_shape}")
+    print(f"Stride      : {stride_shape}")
+    print(f"Depth input : {use_depth}")
+    print(f"Raw transforms: {raw_transforms}")
 
-    else:
-
-        dataset = StandardHDF5Dataset(
-            file_path=args.h5,
-            phase="test",
-            slice_builder_config={
-                "name": "SliceBuilder",
-                "ndim": 3,
-                "patch_shape": [16, 128, 128],
-                "stride_shape": [8, 64, 64],
-            },
-            transformer_config={
-                "label": [{"name": "ToTensor", "dtype": "long", "expand_dims": False}],
-                "raw": [
-                    {"name": "Normalize"},
-                    {"name": "ToTensor", "expand_dims": True},
-                ],
-            },
-        )
+    dataset_cls = LazyHDF5DatasetWithDepth if use_depth else StandardHDF5Dataset
+    dataset = dataset_cls(
+        file_path=args.h5,
+        phase="test",
+        slice_builder_config=slice_builder_config,
+        transformer_config=transformer_config,
+    )
 
     loader = DataLoader(
         dataset,
-        batch_size=1,
+        batch_size=args.batch_size,
         shuffle=False,
-        num_workers=0,
-        pin_memory=False,
-        collate_fn=lambda batch: batch[0],
+        num_workers=args.num_workers,
+        pin_memory=device.type == "cuda",
+        collate_fn=collate_test_batch,
     )
 
     print(f"Number of test patches: " f"{len(dataset)}")
@@ -462,9 +508,7 @@ def main():
     # METRIC STORAGE
     # --------------------------------------------------------
 
-    expected_count = expected_overlap_count(
-        dataset.volume_shape, (16, 128, 128), (8, 64, 64)
-    )
+    expected_count = expected_overlap_count(dataset.volume_shape, patch_shape, stride_shape)
 
     accumulator = VolumeAccumulator(dataset.volume_shape, args.n_classes)
 
@@ -480,133 +524,56 @@ def main():
     print("=" * 80)
     print("RUNNING TEST")
     print("=" * 80)
-    boundary_stats = PatchBoundaryStats(n_classes=args.n_classes, border=4)
+    # border 4 as before, reduced for thin patches (the stats need 2*border < min patch size)
+    boundary_border = max(1, min(4, (min(patch_shape) - 1) // 2))
+    boundary_stats = PatchBoundaryStats(n_classes=args.n_classes, border=boundary_border)
 
-    with torch.no_grad():
+    with h5py.File(args.h5, "r") as test_h5, torch.no_grad():
+        label_volume = np.asarray(test_h5["label"][:])
 
-        test_h5 = h5py.File(args.h5, "r")
-        label_dataset = test_h5["label"]
-        label_volume = np.asarray(label_dataset[:])
-        for batch_idx, batch in enumerate(
-            tqdm(loader, desc="Testing", total=len(loader), unit="batch")
+        for input_tensor, patch_slices in tqdm(
+            loader, desc="Testing", total=len(loader), unit="batch"
         ):
-
-            # ============================================================
-            # BATCH STRUCTURE
-            # ============================================================
-
-            input_tensor = batch[0]
-
-            patch_slice = batch[1]
-
-            # ============================================================
-            # ADD CHANNEL DIMENSION
-            # ============================================================
-
-            # Dataset возвращает:
-            # [B, D, H, W]
-            #
-            # UNet3D ожидает:
             # [B, C, D, H, W]
-
-            if input_tensor.ndim == 4:
-                input_tensor = input_tensor.unsqueeze(0)
-
             input_tensor = input_tensor.to(device, non_blocking=True)
 
-            # ============================================================
-            # GET GROUND TRUTH LABEL FROM HDF5
-            # ============================================================
-
-            label_np = label_dataset[patch_slice]
-
-            target_tensor = torch.from_numpy(np.asarray(label_np)).long()
-
-            # Добавляем batch dimension
-            #
-            # [D,H,W]
-            #     ↓
-            # [B,D,H,W]
-
-            target_tensor = target_tensor.unsqueeze(0).to(device, non_blocking=True)
-
-            # ============================================================
-            # MODEL PREDICTION
-            # ============================================================
-
-            # ============================================================
-            # FLATTEN METRICS
-            # ============================================================
-
             _probs, logits = model(input_tensor, return_logits=True)
-
             values = torch.softmax(logits, dim=1)
-
             prediction = torch.argmax(values, dim=1)
 
             values_np = values.cpu().numpy()
             pred_np = prediction.cpu().numpy()
-            boundary_stats.add_patch(pred_np[0], np.asarray(label_np))
-            sl = spatial_slice_from_index(patch_slice)
 
-            accumulator.add_patch(values_np[0], sl)
+            for sample_idx, patch_slice in enumerate(patch_slices):
+                sl = spatial_slice_from_index(patch_slice)
+                label_np = label_volume[sl]
 
-            # ============================================================
-            # VISUALIZATION SELECTION
-            # ============================================================
+                boundary_stats.add_patch(pred_np[sample_idx], label_np)
+                accumulator.add_patch(values_np[sample_idx], sl)
 
-            if len(saved_slices) < args.max_vis_samples:
+                # ------------------------------------------------
+                # VISUALIZATION SELECTION
+                # ------------------------------------------------
+                if len(saved_slices) >= args.max_vis_samples:
+                    continue
 
-                batch_size = input_tensor.shape[0]
-
-                for sample_idx in range(batch_size):
-
-                    gt_sample = target_tensor[sample_idx].cpu().numpy()
-
-                    pred_sample = prediction[sample_idx].cpu().numpy()
-
-                    raw_sample = input_tensor[sample_idx].cpu().numpy()
-
-                    # Убираем channel dimension
-                    # [1,D,H,W] -> [D,H,W]
-
-                    if raw_sample.ndim == 4 and raw_sample.shape[0] == 1:
-                        raw_sample = raw_sample[0]
-
-                    # ====================================================
-                    # CLASSES IN THIS PATCH
-                    # ====================================================
-
-                    patch_classes = set(np.unique(gt_sample).tolist())
-
-                    new_classes = patch_classes - covered_classes
-
-                    # ====================================================
-                    # SAVE PATCH
-                    # ====================================================
-
-                    should_save = bool(new_classes) or len(saved_slices) < min(
-                        10, args.max_vis_samples
+                patch_classes = set(np.unique(label_np).tolist())
+                new_classes = patch_classes - covered_classes
+                should_save = bool(new_classes) or len(saved_slices) < min(
+                    10, args.max_vis_samples
+                )
+                if should_save:
+                    raw_sample = input_tensor[sample_idx, 0].cpu().numpy()
+                    saved_slices.append(
+                        {
+                            "raw": raw_sample,
+                            "gt": np.asarray(label_np),
+                            "pred": pred_np[sample_idx],
+                            "classes": sorted(patch_classes),
+                            "slice": patch_slice,
+                        }
                     )
-
-                    if should_save:
-
-                        saved_slices.append(
-                            {
-                                "raw": raw_sample,
-                                "gt": gt_sample,
-                                "pred": pred_sample,
-                                "classes": sorted(patch_classes),
-                                "slice": patch_slice,
-                            }
-                        )
-
-                        covered_classes.update(patch_classes)
-
-                    if len(saved_slices) >= args.max_vis_samples:
-                        break
-
-        test_h5.close()
+                    covered_classes.update(patch_classes)
 
     # --------------------------------------------------------
     # VOLUME-LEVEL RECONSTRUCTION
@@ -619,8 +586,8 @@ def main():
 
     recon_stats = accumulator.validate(
         expected_count=expected_count,
-        patch_shape=(16, 128, 128),
-        stride_shape=(8, 64, 64),
+        patch_shape=patch_shape,
+        stride_shape=stride_shape,
     )
 
     print("Reconstruction OK")
@@ -637,6 +604,19 @@ def main():
     # --------------------------------------------------------
 
     pred_volume, averaged = accumulator.finalize()
+
+    argmax_metrics = None
+    if args.monotonic:
+        argmax_metrics = metrics_from_confusion(
+            confusion_from_volumes(label_volume, pred_volume, args.n_classes)
+        )
+        np.save(os.path.join(args.output_dir, "prediction_volume_argmax.npy"), pred_volume)
+        print("Monotonic decoding along depth...")
+        pred_volume = monotonic_decode(averaged).astype(pred_volume.dtype, copy=False)
+        print(
+            "Argmax     mIoU (without class 0): "
+            f"{argmax_metrics['mean_iou_no_background']:.5f}"
+        )
     # Сохраняем reconstructed full volume и карту перекрытий патчей
     np.save(os.path.join(args.output_dir, "prediction_volume.npy"), pred_volume)
 
@@ -717,6 +697,15 @@ def main():
     print(f"Mean IoU (without class 0)  : " f"{mean_iou_no_background:.5f}")
 
     print(f"Mean IoU (with class 0)     : " f"{mean_iou_with_background:.5f}")
+
+    if argmax_metrics is not None:
+        print()
+        print("Decoding: monotonic along depth (metrics above)")
+        print(
+            "Plain argmax mIoU (without class 0): "
+            f"{argmax_metrics['mean_iou_no_background']:.5f}, "
+            f"pixel accuracy: {argmax_metrics['pixel_accuracy']:.5f}"
+        )
 
     print()
     print(

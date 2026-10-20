@@ -40,7 +40,9 @@ class RandomFlip:
     def __init__(self, random_state: np.random.RandomState, axis_prob: float = 0.5, **kwargs):
         assert random_state is not None, "RandomState cannot be None"
         self.random_state = random_state
-        self.axes = (1, 2)
+        # Axis order is (crossline, depth, inline). Axis 1 (depth) must never be flipped:
+        # an upside-down patch reverses the stratigraphic order of the classes.
+        self.axes = (0, 2)
         self.axis_prob = axis_prob
         
 

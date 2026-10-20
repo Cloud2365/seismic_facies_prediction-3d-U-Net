@@ -5,6 +5,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import torch
 
 import pytorch3dunet.augment.transforms as transforms
 from pytorch3dunet.datasets.utils import ConfigDataset, RandomScaler, calculate_stats, get_slice_builder, mirror_pad
@@ -336,135 +337,79 @@ class LazyHDF5Dataset(AbstractHDF5Dataset):
 
 
 class LazyHDF5DatasetWithDepth(LazyHDF5Dataset):
+    """Lazy HDF5 dataset with an additional absolute-depth channel.
+
+    Output raw patch: ``[2, D, H, W]``
+        channel 0: seismic, transformed by the regular ``raw`` transformer from the config
+                   (Normalize, augmentations, ToTensor with ``expand_dims: true``);
+        channel 1: absolute depth of every voxel, linear in [-1, 1] over the full volume depth.
+
+    The depth channel is appended *after* the transforms. This matters for two reasons:
+      * amplitude normalization (global min/max from the config) is applied to seismic only;
+      * geometric augmentations (rotation) move the seismic content but must not move the
+        depth coordinate — the depth of a voxel position inside the patch is fixed.
+
+    Backward compatibility: configs created before this change had no ``Normalize`` in the raw
+    transformer of this dataset (normalization was done per patch inside the dataset). If no
+    ``Normalize``/``Standardize`` is present in the raw transformer config, the old per-patch
+    min-max normalization is applied so that old checkpoints are evaluated exactly as trained.
     """
-    Lazy HDF5 dataset with an additional absolute-depth channel.
 
-    Output raw patch:
-        [2, D, H, W]
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        raw_cfg = (kwargs.get("transformer_config") or {}).get("raw", [])
+        names = {t.get("name") for t in raw_cfg}
+        self._legacy_patch_norm = not ({"Normalize", "Standardize", "PercentileNormalizer"} & names)
+        if self._legacy_patch_norm:
+            logger.warning(
+                "LazyHDF5DatasetWithDepth: no normalization in the raw transformer, "
+                "falling back to legacy per-patch min-max normalization"
+            )
+        logger.info("Using LazyHDF5DatasetWithDepth")
 
-    Channel 0:
-        seismic normalized exactly like the existing Normalize transform
-
-    Channel 1:
-        absolute depth normalized globally to [-1, 1]
-    """
-
-    def _normalize_seismic(self, patch):
+    @staticmethod
+    def _legacy_normalize(patch: np.ndarray) -> np.ndarray:
         patch = np.asarray(patch, dtype=np.float32)
+        lo, hi = float(np.min(patch)), float(np.max(patch))
+        return np.clip(2.0 * (patch - lo) / (hi - lo + 1e-10) - 1.0, -1.0, 1.0)
 
-        min_value = np.min(patch)
-        max_value = np.max(patch)
-
-        normalized = (
-            2.0 * (patch - min_value)
-            / (max_value - min_value + 1e-10)
-            - 1.0
-        )
-
-        return np.clip(
-            normalized,
-            -1.0,
-            1.0
-        )
-
-    def _make_depth_channel(self, idx, spatial_shape):
-        # Dataset uses spatial indices as:
-        # (depth, height, width)
-        if len(idx) == 4:
-            idx = idx[1:]
-
-        y_slice = idx[1]
-
-        y_start = y_slice.start
-        y_stop = y_slice.stop
-
+    def _depth_channel(self, raw_idx, spatial_shape) -> np.ndarray:
+        if len(raw_idx) == 4:
+            raw_idx = raw_idx[1:]
+        y = raw_idx[1]
         total_depth = self.volume_shape[1]
-
-        # Global absolute depth in [-1, 1]
-        depth_values = np.linspace(
-            -1.0,
-            1.0,
-            total_depth,
-            dtype=np.float32
-        )
-
-        depth_values = depth_values[
-            y_start:y_stop
-        ]
-
-        depth_channel = depth_values[
-            None, :, None
-        ]
-
-        depth_channel = np.broadcast_to(
-            depth_channel,
-            spatial_shape
-        )
-
-        return depth_channel.astype(
-            np.float32,
-            copy=False
-        )
+        depth = np.linspace(-1.0, 1.0, total_depth, dtype=np.float32)[y.start:y.stop]
+        return np.broadcast_to(depth[None, :, None], spatial_shape).astype(np.float32)
 
     def get_raw_patch(self, idx):
-        with h5py.File(
-            self.file_path,
-            "r"
-        ) as f:
-
-            patch = f[
-                self.raw_internal_path
-            ][idx]
-
-        seismic = self._normalize_seismic(
-            patch
-        )
-
-        depth = self._make_depth_channel(
-            idx,
-            seismic.shape
-        )
-
-        return np.stack(
-            [
-                seismic,
-                depth
-            ],
-            axis=0
-        )
+        with h5py.File(self.file_path, "r") as f:
+            patch = f[self.raw_internal_path][idx]
+        return self._legacy_normalize(patch) if self._legacy_patch_norm else patch
 
     def get_raw_padded_patch(self, idx):
-        with h5py.File(
-            self.file_path,
-            "r"
-        ) as f:
+        # Halo is not used in this project. Read-only access: never write `raw_padded`
+        # into the test file (the parent implementation opens it with "r+").
+        if any(h != 0 for h in self.halo_shape):
+            raise ValueError("LazyHDF5DatasetWithDepth supports only halo_shape = 0")
+        return self.get_raw_patch(idx)
 
-            raw = f[
-                self.raw_internal_path
-            ]
+    def _append_depth(self, raw_t, raw_idx):
+        raw_t = torch.as_tensor(raw_t)
+        if raw_t.ndim == 3:
+            raw_t = raw_t.unsqueeze(0)
+        if raw_t.shape[0] != 1:
+            raise ValueError(
+                "LazyHDF5DatasetWithDepth expects a single seismic channel after transforms; "
+                f"got shape {tuple(raw_t.shape)}. Use ToTensor with expand_dims: true."
+            )
+        depth = torch.from_numpy(self._depth_channel(raw_idx, tuple(raw_t.shape[1:])))
+        return torch.cat([raw_t.float(), depth.unsqueeze(0)], dim=0)
 
-            patch = raw[idx]
-
-        # Здесь halo не используется в нашем эксперименте,
-        # но сохраняем совместимость с Dataset API.
-        seismic = self._normalize_seismic(
-            patch
-        )
-
-        if len(idx) == 4:
-            spatial_idx = idx[1:]
-        else:
-            spatial_idx = idx
-
-        depth = self._make_depth_channel(
-            spatial_idx,
-            seismic.shape
-        )
-
-        return np.stack(
-            [
-                seismic,
-                depth
-            ],
-            axis=0
-        )
+    def __getitem__(self, idx: int) -> tuple:
+        if idx >= len(self):
+            raise StopIteration
+        if self.random_scaler is not None:
+            raise ValueError("random_scale is not supported together with the depth channel")
+        raw_idx = self.raw_slices[idx]
+        out = super().__getitem__(idx)
+        return (self._append_depth(out[0], raw_idx),) + tuple(out[1:])
