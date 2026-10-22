@@ -87,6 +87,9 @@ def parse_args():
     parser.add_argument("--patch_shape", type=int, nargs=3, default=[16, 128, 128])
     parser.add_argument("--stride_shape", type=int, nargs=3, default=[8, 64, 64])
     parser.add_argument("--aug", action="store_true")
+    parser.add_argument("--vstretch", action="store_true", help="Растяжение по глубине только на train")
+    parser.add_argument("--vstretch_min", type=float, default=0.7)
+    parser.add_argument("--vstretch_max", type=float, default=1.6)
     parser.add_argument("--absolute_depth", action="store_true")
     parser.add_argument("--rot_angle", type=float, default=10.0)
     parser.add_argument(
@@ -138,6 +141,14 @@ def generate_config(args, train_paths, val_path, class_weights=None, amp_range=N
             {"name": "RandomRotate", "angle_spectrum": args.rot_angle, "order": 0, "axes": [[1, 2]]},
             {"name": "RandomFlip"},
         ])
+    if args.vstretch:
+        stretch = {
+            "name": "RandomVerticalStretch",
+            "min_scale": args.vstretch_min,
+            "max_scale": args.vstretch_max,
+        }
+        raw_train.append({**stretch, "order": 1})
+        label_train.append({**stretch, "order": 0})
 
     raw_train.append(_tensor(True))
     label_train.append(_tensor(False, "long"))
@@ -212,6 +223,7 @@ def generate_config(args, train_paths, val_path, class_weights=None, amp_range=N
             "amplitude_range": list(amp_range) if amp_range is not None else None,
             "absolute_depth": bool(args.absolute_depth),
             "aug": bool(args.aug),
+            "vstretch": [args.vstretch_min, args.vstretch_max] if args.vstretch else None
         },
     }
 

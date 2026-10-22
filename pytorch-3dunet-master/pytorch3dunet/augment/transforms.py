@@ -40,8 +40,6 @@ class RandomFlip:
     def __init__(self, random_state: np.random.RandomState, axis_prob: float = 0.5, **kwargs):
         assert random_state is not None, "RandomState cannot be None"
         self.random_state = random_state
-        # Axis order is (crossline, depth, inline). Axis 1 (depth) must never be flipped:
-        # an upside-down patch reverses the stratigraphic order of the classes.
         self.axes = (0, 2)
         self.axis_prob = axis_prob
         
@@ -140,7 +138,60 @@ class RandomRotate:
             m = np.stack(channels, axis=0)
 
         return m
+class RandomVerticalStretch:
+    """Растянуть или сжать патч по глубине и вернуть исходный размер.
 
+    Ось глубины — 1, порядок осей (crossline, depth, inline).
+    Сейсмика и разметка должны стоять в конфиге парой: у обеих один и тот же
+    min_scale/max_scale, у разметки order=0, у сейсмики order=1.
+    Одинаковый random_state у сырых данных и меток даёт один и тот же коэффициент
+    и одно и то же окно обрезки.
+    """
+
+    def __init__(
+        self,
+        random_state: np.random.RandomState,
+        min_scale: float = 0.7,
+        max_scale: float = 1.6,
+        order: int = 0,
+        **kwargs,
+    ):
+        assert random_state is not None, "RandomState cannot be None"
+        if not 0 < float(min_scale) <= float(max_scale):
+            raise ValueError(f"bad stretch range: {min_scale}, {max_scale}")
+        self.random_state = random_state
+        self.min_scale = float(min_scale)
+        self.max_scale = float(max_scale)
+        self.order = int(order)
+
+    def __call__(self, m: np.ndarray) -> np.ndarray:
+        assert m.ndim in (3, 4), "Supports only 3D (DxHxW) or 4D (CxDxHxW)"
+        scale = float(self.random_state.uniform(self.min_scale, self.max_scale))
+        place = float(self.random_state.random())
+        if m.ndim == 3:
+            return self._warp(m, scale, place)
+        channels = [self._warp(m[c], scale, place) for c in range(m.shape[0])]
+        return np.stack(channels, axis=0)
+
+    def _warp(self, volume: np.ndarray, scale: float, place: float) -> np.ndarray:
+        x, depth, w = volume.shape
+        new_depth = max(1, int(round(depth * scale)))
+        if new_depth == depth:
+            src = np.arange(depth, dtype=np.float64)
+        elif new_depth > depth:
+            start = int(np.floor(place * (new_depth - depth)))
+            src = (start + np.arange(depth)) / scale
+        else:
+            before = int(np.floor(place * (depth - new_depth)))
+            src = np.clip((np.arange(depth) - before) / scale, 0, depth - 1)
+
+        xx = np.broadcast_to(np.arange(x)[:, None, None], (x, depth, w))
+        zz = np.broadcast_to(src[None, :, None], (x, depth, w))
+        ww = np.broadcast_to(np.arange(w)[None, None, :], (x, depth, w))
+        out = map_coordinates(volume, [xx, zz, ww], order=self.order, mode="nearest")
+        if self.order == 0:
+            return np.rint(out).astype(volume.dtype, copy=False)
+        return out.astype(volume.dtype, copy=False)
 
 class RandomContrast:
     """Adjust contrast by scaling each voxel to `mean + alpha * (v - mean)`.
