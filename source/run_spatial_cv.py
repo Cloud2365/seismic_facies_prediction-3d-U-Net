@@ -18,8 +18,10 @@
 
   python run_spatial_cv.py --data path\\to\\all_data.h5 --batch_size 4
 
-Нормировка по патчу, без аугментации, без весов, без канала глубины.
---early_stop 0, как у официального прогона.
+Нормировка глобальная, без аугментации, без весов, без канала глубины.
+Тест считает и прямой argmax, и монотонное декодирование.
+--early_stop 0, как у официального прогона. Опубликованная таблица T1–T4
+снята в этом протоколе; этот скрипт обучение заново не подменяет.
 """
 
 import argparse
@@ -79,7 +81,7 @@ def train(args, out_dir):
         "--val_h5",
         os.path.join(out_dir, "val.h5"),
         "--norm",
-        "patch",
+        "global",
         "--early_stop",
         "0",
         "--n_epoch",
@@ -124,6 +126,7 @@ def test_blocks(args):
             str(args.test_batch_size),
             "--max_vis_samples",
             "0",
+            "--monotonic",
         ]
         print("Запуск:", " ".join(cmd))
         subprocess.run(cmd, check=True)
