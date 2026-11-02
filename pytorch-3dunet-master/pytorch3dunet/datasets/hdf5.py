@@ -413,3 +413,44 @@ class LazyHDF5DatasetWithDepth(LazyHDF5Dataset):
         raw_idx = self.raw_slices[idx]
         out = super().__getitem__(idx)
         return (self._append_depth(out[0], raw_idx),) + tuple(out[1:])
+
+class LazyHDF5DatasetWithRGT(LazyHDF5Dataset):
+    """
+    Lazy HDF5 dataset для двух каналов:
+        raw[0] — seismic
+        raw[1] — RGT
+
+    HDF5 raw shape: [2, crossline, depth, inline].
+    label shape: [crossline, depth, inline].
+
+    Не создаёт дублирующий raw_padded при тестировании.
+    """
+
+    def __init__(self, *args, **kwargs):
+
+        super().__init__(*args, **kwargs)
+
+        with h5py.File(self.file_path, "r") as f:
+
+            raw = f[self.raw_internal_path]
+
+            if raw.ndim != 4 or raw.shape[0] != 2:
+                raise ValueError(
+                    "LazyHDF5DatasetWithRGT ожидает raw "
+                    "формы [2, C, D, I], получено "
+                    f"{raw.shape}"
+                )
+
+        logger.info("Using LazyHDF5DatasetWithRGT")
+
+    def get_raw_padded_patch(self, idx):
+
+        # В проекте используется halo_shape = 0.
+        # Поэтому достаточно прочитать исходный patch.
+        if any(h != 0 for h in self.halo_shape):
+            raise ValueError(
+                "LazyHDF5DatasetWithRGT пока поддерживает "
+                "только halo_shape = 0"
+            )
+
+        return self.get_raw_patch(idx)

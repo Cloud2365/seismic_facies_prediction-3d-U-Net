@@ -764,7 +764,77 @@ class PercentileNormalizer:
 
         return (m - pmin) / (pmax - pmin + self.eps)
 
+class NormalizeSeismicRGT:
+    """
+    Нормализация двух входных каналов.
 
+    m[0] — сейсмические амплитуды:
+           нормализуются по диапазону, рассчитанному только на TRAIN.
+
+    m[1] — RGT:
+           переводится из [0, 1] в [-1, 1].
+
+    Геометрическая форма входа: [2, D, H, W].
+    """
+
+    def __init__(
+        self,
+        min_value=None,
+        max_value=None,
+        eps=1e-10,
+        **kwargs,
+    ):
+        self.min_value = min_value
+        self.max_value = max_value
+        self.eps = eps
+
+    def __call__(self, m):
+
+        if m.ndim != 4 or m.shape[0] != 2:
+            raise ValueError(
+                "NormalizeSeismicRGT ожидает "
+                "[2, D, H, W], получено "
+                f"{m.shape}"
+            )
+
+        out = np.asarray(
+            m,
+            dtype=np.float32,
+        ).copy()
+
+        # Сейсмика.
+        low = (
+            float(out[0].min())
+            if self.min_value is None
+            else float(self.min_value)
+        )
+
+        high = (
+            float(out[0].max())
+            if self.max_value is None
+            else float(self.max_value)
+        )
+
+        if high <= low:
+            raise ValueError(
+                f"Неправильный диапазон сейсмики: {low}, {high}"
+            )
+
+        out[0] = np.clip(
+            2.0 * (out[0] - low) / (high - low + self.eps) - 1.0,
+            -1.0,
+            1.0,
+        )
+
+        # RGT: фиксированное преобразование [0,1] -> [-1,1].
+        out[1] = np.clip(
+            2.0 * out[1] - 1.0,
+            -1.0,
+            1.0,
+        )
+
+        return out
+    
 class Normalize:
     """Apply simple min-max scaling to a given input tensor.
 

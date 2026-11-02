@@ -243,7 +243,7 @@ def metrics_from_confusion(
     cm: np.ndarray,
     background_class: int = 0,
 ) -> dict[str, Any]:
-    """Pixel / class accuracy, IoU, precision, recall, F1 from a confusion matrix."""
+    """Pixel / class accuracy, IoU, FWIoU, precision, recall, F1 from a confusion matrix."""
     cm = np.asarray(cm, dtype=np.float64)
     n_classes = cm.shape[0]
     tp = np.diag(cm)
@@ -256,19 +256,41 @@ def metrics_from_confusion(
     precision = np.divide(
         tp, tp + fp, out=np.full(n_classes, np.nan), where=(tp + fp) > 0
     )
-    recall = np.divide(tp, tp + fn, out=np.full(n_classes, np.nan), where=(tp + fn) > 0)
+    recall = np.divide(
+        tp, tp + fn, out=np.full(n_classes, np.nan), where=(tp + fn) > 0
+    )
     f1 = np.divide(
         2 * precision * recall,
         precision + recall,
         out=np.full(n_classes, np.nan),
         where=(precision + recall) > 0,
     )
-    iou = np.divide(tp, union, out=np.full(n_classes, np.nan), where=union > 0)
+    iou = np.divide(
+        tp, union, out=np.full(n_classes, np.nan), where=union > 0
+    )
     class_accuracy = np.divide(
         tp, support, out=np.full(n_classes, np.nan), where=support > 0
     )
 
     pixel_accuracy = float(tp.sum() / cm.sum()) if cm.sum() > 0 else 0.0
+
+    # Frequency Weighted IoU
+    # Частота класса определяется по истинной разметке.
+    total_support = support.sum()
+
+    if total_support > 0:
+        class_frequency = support / total_support
+    else:
+        class_frequency = np.zeros(n_classes, dtype=np.float64)
+
+    # Вклад каждого класса в общий FWIoU.
+    # Если класс отсутствует и в разметке, и в предсказании,
+    # его неопределённый IoU даёт нулевой вклад.
+    per_class_fwiou = (
+        class_frequency * np.nan_to_num(iou, nan=0.0)
+    )
+
+    frequency_weighted_iou = float(per_class_fwiou.sum())
 
     fg = np.array([c != background_class for c in range(n_classes)])
 
@@ -286,7 +308,9 @@ def metrics_from_confusion(
         return np.where(np.isfinite(arr), arr, 0.0).tolist()
 
     row_sums = cm.sum(axis=1, keepdims=True)
-    cm_norm = np.divide(cm, row_sums, out=np.zeros_like(cm), where=row_sums != 0)
+    cm_norm = np.divide(
+        cm, row_sums, out=np.zeros_like(cm), where=row_sums != 0
+    )
 
     return {
         "n_classes": int(n_classes),
@@ -297,12 +321,15 @@ def metrics_from_confusion(
         "mean_iou_with_background": _finite(iou),
         "mean_iou_no_background": _finite(iou, fg),
         "mean_iou_present_no_background": _finite(iou, fg),
+        "frequency_weighted_iou": frequency_weighted_iou,
         "mean_precision_no_background": _finite(precision, fg),
         "mean_recall_no_background": _finite(recall, fg),
         "mean_f1_no_background": _finite(f1, fg),
         "per_class": {
             "accuracy": _zero_fill(class_accuracy),
             "iou": _zero_fill(iou),
+            "frequency": _zero_fill(class_frequency),
+            "frequency_weighted_iou": _zero_fill(per_class_fwiou),
             "precision": _zero_fill(precision),
             "recall": _zero_fill(recall),
             "f1": _zero_fill(f1),

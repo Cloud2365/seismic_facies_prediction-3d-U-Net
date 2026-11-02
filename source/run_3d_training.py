@@ -19,31 +19,87 @@ def compute_class_weights(labels, n_classes):
     return weights.tolist()
 
 
-def train_amplitude_range(paths, low_pct=0.5, high_pct=99.5, max_samples=5_000_000, seed=0):
-    """Global amplitude range estimated on the TRAIN volumes only.
-
-    Percentiles instead of min/max: a single strong reflector must not compress the rest of
-    the signal. The same fixed range is used for train, val and test, so a voxel gets the
-    same normalized value in every patch that covers it.
+def train_amplitude_range( paths, low_pct=0.5,high_pct=99.5,max_samples=5_000_000,seed=0,):
     """
+    Диапазон амплитуд оценивается только по TRAIN.
+
+    Для обычного raw [D,H,W] используется весь массив.
+    Для RGT raw [2,D,H,W] используется только raw[0],
+    то есть сейсмический канал.
+    """
+
     rng = np.random.default_rng(seed)
+
     sizes = []
+
     for path in paths:
+
         with h5py.File(path, "r") as f:
-            sizes.append(int(np.prod(f["raw"].shape)))
+
+            ds = f["raw"]
+
+            if ds.ndim == 4:
+
+                if ds.shape[0] != 2:
+                    raise ValueError(
+                        f"Ожидалось два канала, получено {ds.shape}"
+                    )
+
+                shape = ds.shape[1:]
+
+            else:
+                shape = ds.shape
+
+            sizes.append(int(np.prod(shape)))
+
     total = sum(sizes)
+
     samples = []
+
     for path, size in zip(paths, sizes):
+
         with h5py.File(path, "r") as f:
-            raw = f["raw"][:].reshape(-1)
-        take = min(size, max(1, int(max_samples * size / total)))
-        idx = rng.choice(size, size=take, replace=False) if take < size else slice(None)
-        samples.append(np.asarray(raw[idx], dtype=np.float64))
+
+            ds = f["raw"]
+
+            # Нормализуем только канал сейсмики.
+            raw = (
+                ds[0]
+                if ds.ndim == 4
+                else ds[:]
+            )
+
+            raw = np.asarray(raw).reshape(-1)
+
+        take = min(
+            size,
+            max(1, int(max_samples * size / total)),
+        )
+
+        idx = (
+            rng.choice(size, size=take, replace=False)
+            if take < size
+            else slice(None)
+        )
+
+        samples.append(
+            np.asarray(raw[idx], dtype=np.float64)
+        )
+
         del raw
+
     values = np.concatenate(samples)
-    low, high = np.percentile(values, [low_pct, high_pct])
+
+    low, high = np.percentile(
+        values,
+        [low_pct, high_pct],
+    )
+
     if not high > low:
-        raise ValueError(f"Degenerate amplitude range: [{low}, {high}]")
+        raise ValueError(
+            f"Degenerate amplitude range: [{low}, {high}]"
+        )
+
     return float(low), float(high)
 
 
@@ -91,6 +147,7 @@ def parse_args():
     parser.add_argument("--vstretch_min", type=float, default=0.7)
     parser.add_argument("--vstretch_max", type=float, default=1.6)
     parser.add_argument("--absolute_depth", action="store_true")
+    parser.add_argument("--rgt",action="store_true",help="Использовать два входных канала: seismic + RGT")
     parser.add_argument("--rot_angle", type=float, default=10.0)
     parser.add_argument(
         "--loss",
@@ -104,7 +161,14 @@ def parse_args():
     parser.add_argument("--config_dir", type=str, default="my_configs")
     parser.add_argument("--temp_dir", type=str, default="temp_splits")
     parser.add_argument("--resume", type=str, default=None)
-    return parser.parse_args()
+    args = parser.parse_args()
+   
+    if args.rgt and args.absolute_depth:
+        parser.error(
+            "--rgt и --absolute_depth нельзя использовать одновременно"
+        )
+
+    return args
 
 
 def _tensor(expand_dims, dtype=None):
@@ -127,11 +191,41 @@ def config_path_for(args):
 def generate_config(args, train_paths, val_path, class_weights=None, amp_range=None):
     # Normalization is the same transform in both modes. With --absolute_depth the dataset
     # appends the depth channel after the transforms, so it is not normalized or rotated.
-    raw_train = [_normalize_transform(amp_range)]
-    raw_val = [_normalize_transform(amp_range), _tensor(True)]
+    if args.rgt:
+
+        if amp_range is None:
+
+            rgt_normalizer = {
+                "name": "NormalizeSeismicRGT"
+            }
+
+        else:
+
+            rgt_normalizer = {
+                "name": "NormalizeSeismicRGT",
+                "min_value": amp_range[0],
+                "max_value": amp_range[1],
+            }
+
+        raw_train = [rgt_normalizer.copy()]
+
+        raw_val = [
+            rgt_normalizer.copy(),
+            _tensor(True),
+        ]
+
+    else:
+
+        raw_train = [_normalize_transform(amp_range)]
+
+        raw_val = [
+            _normalize_transform(amp_range),
+            _tensor(True),
+        ]
+
     label_train = []
     label_val = [_tensor(False, "long")]
-
+    
     if args.aug:
         raw_train.extend([
             {"name": "RandomRotate", "angle_spectrum": args.rot_angle, "order": 1, "axes": [[1, 2]]},
@@ -156,7 +250,7 @@ def generate_config(args, train_paths, val_path, class_weights=None, amp_range=N
     config = {
         "manual_seed": args.seed,
         "loaders": {
-            "dataset": "LazyHDF5DatasetWithDepth" if args.absolute_depth else "LazyHDF5Dataset",
+           "dataset": ("LazyHDF5DatasetWithRGT" if args.rgt else ("LazyHDF5DatasetWithDepth" if args.absolute_depth else "LazyHDF5Dataset")),
             "train": {
                 "file_paths": train_paths,
                 "slice_builder": {
@@ -182,7 +276,7 @@ def generate_config(args, train_paths, val_path, class_weights=None, amp_range=N
         },
         "model": {
             "name": args.arch,
-            "in_channels": 2 if args.absolute_depth else 1,
+            "in_channels": (2 if (args.absolute_depth or args.rgt) else 1),
             "out_channels": args.n_classes,
             "f_maps": args.f_maps,
             "layer_order": "gcr",
@@ -223,10 +317,11 @@ def generate_config(args, train_paths, val_path, class_weights=None, amp_range=N
             "amplitude_range": list(amp_range) if amp_range is not None else None,
             "absolute_depth": bool(args.absolute_depth),
             "aug": bool(args.aug),
-            "vstretch": [args.vstretch_min, args.vstretch_max] if args.vstretch else None
+            "vstretch": [args.vstretch_min, args.vstretch_max] if args.vstretch else None,
+            "rgt": bool(args.rgt)
         },
     }
-
+    
     if args.loss in ("CrossEntropyLoss", "DiceCrossEntropyLoss") and args.class_weights and class_weights is not None:
         config["loss"]["weight"] = class_weights
 

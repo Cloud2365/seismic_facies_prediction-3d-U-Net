@@ -29,7 +29,9 @@ from volume_inference import (
 
 from pytorch3dunet.datasets.hdf5 import (
     StandardHDF5Dataset,
+    LazyHDF5Dataset,
     LazyHDF5DatasetWithDepth,
+    LazyHDF5DatasetWithRGT,
 )
 from monotonic_decode import monotonic_decode
 from pytorch3dunet.unet3d.model import get_model
@@ -300,21 +302,57 @@ def print_confusion_matrix(cm, n_classes):
 # ============================================================
 
 
-def test_raw_transforms(val_raw_cfg, use_depth):
-    """Raw transforms for the test: the validation transforms of the training config.
+def test_raw_transforms(val_raw_cfg, use_depth, use_rgt=False):
 
-    Only deterministic transforms are kept. Old configs are handled for compatibility:
-      * a 1-channel config without Normalize keeps the old hard-coded per-patch Normalize;
-      * a depth config without Normalize falls back to per-patch normalization inside
-        LazyHDF5DatasetWithDepth (exactly what those checkpoints were trained with).
-    """
-    allowed = {"Normalize", "Standardize", "PercentileNormalizer", "ToTensor"}
-    transforms = [dict(t) for t in val_raw_cfg if t.get("name") in allowed]
-    names = [t["name"] for t in transforms]
-    if not use_depth and not ({"Normalize", "Standardize", "PercentileNormalizer"} & set(names)):
-        transforms.insert(0, {"name": "Normalize"})
-    transforms = [t for t in transforms if t["name"] != "ToTensor"]
-    transforms.append({"name": "ToTensor", "expand_dims": True})
+    allowed = {
+        "Normalize",
+        "Standardize",
+        "PercentileNormalizer",
+        "NormalizeSeismicRGT",
+        "ToTensor",
+    }
+
+    transforms = [
+        dict(t)
+        for t in val_raw_cfg
+        if t.get("name") in allowed
+    ]
+
+    names = {t["name"] for t in transforms}
+
+    has_normalization = bool(
+        names
+        & {
+            "Normalize",
+            "Standardize",
+            "PercentileNormalizer",
+            "NormalizeSeismicRGT",
+        }
+    )
+
+    # Старые одноканальные конфиги без нормализации.
+    if (
+        not use_depth
+        and not use_rgt
+        and not has_normalization
+    ):
+        transforms.insert(
+            0,
+            {"name": "Normalize"},
+        )
+
+    transforms = [
+        t for t in transforms
+        if t["name"] != "ToTensor"
+    ]
+
+    transforms.append(
+        {
+            "name": "ToTensor",
+            "expand_dims": True,
+        }
+    )
+
     return transforms
 
 
@@ -449,20 +487,73 @@ def main():
 
     loaders_cfg = config["loaders"]
     val_cfg = loaders_cfg["val"]
-    patch_shape = tuple(val_cfg["slice_builder"]["patch_shape"])
-    stride_shape = tuple(val_cfg["slice_builder"]["stride_shape"])
-    use_depth = (
-        loaders_cfg.get("dataset") == "LazyHDF5DatasetWithDepth"
-        or config["model"].get("in_channels", 1) == 2
+    
+    patch_shape = tuple(
+        val_cfg["slice_builder"]["patch_shape"]
     )
-    if args.absolute_depth and not use_depth:
-        raise ValueError("--absolute_depth given, but the config describes a 1-channel model")
 
-    raw_transforms = test_raw_transforms(val_cfg["transformer"]["raw"], use_depth)
+    stride_shape = tuple(
+        val_cfg["slice_builder"]["stride_shape"]
+    )
+
+    dataset_name = loaders_cfg.get("dataset")
+    experiment = config.get("experiment", {})
+
+    # Определяем тип второго канала по конфигурации,
+    # а не просто по числу входных каналов.
+    use_rgt = (
+        dataset_name == "LazyHDF5DatasetWithRGT"
+        or bool(experiment.get("rgt", False))
+    )
+
+    use_depth = (
+        dataset_name == "LazyHDF5DatasetWithDepth"
+        or bool(experiment.get("absolute_depth", False))
+    )
+
+    if use_rgt and use_depth:
+        raise ValueError(
+            "Конфиг не может одновременно описывать "
+            "RGT и absolute depth."
+        )
+
+    if args.absolute_depth and not use_depth:
+        raise ValueError(
+            "--absolute_depth задан, "
+            "но конфиг не описывает абсолютную глубину."
+        )
+
+    input_channels = int(
+        config["model"].get("in_channels", 1)
+    )
+
+    expected_channels = (
+        2 if (use_rgt or use_depth) else 1
+    )
+
+    if input_channels != expected_channels:
+        raise ValueError(
+            f"Модель ожидает {input_channels} каналов, "
+            f"а загрузчик должен предоставить {expected_channels}."
+        )
+
+    raw_transforms = test_raw_transforms(
+        val_cfg["transformer"]["raw"],
+        use_depth,
+        use_rgt,
+    )
+
     transformer_config = {
         "raw": raw_transforms,
-        "label": [{"name": "ToTensor", "dtype": "long", "expand_dims": False}],
+        "label": [
+            {
+                "name": "ToTensor",
+                "dtype": "long",
+                "expand_dims": False,
+            }
+        ],
     }
+
     slice_builder_config = {
         "name": "SliceBuilder",
         "ndim": 3,
@@ -472,10 +563,17 @@ def main():
 
     print(f"Patch shape : {patch_shape}")
     print(f"Stride      : {stride_shape}")
+    print(f"RGT input   : {use_rgt}")
     print(f"Depth input : {use_depth}")
     print(f"Raw transforms: {raw_transforms}")
 
-    dataset_cls = LazyHDF5DatasetWithDepth if use_depth else StandardHDF5Dataset
+    if use_rgt:
+        dataset_cls = LazyHDF5DatasetWithRGT
+    elif use_depth:
+        dataset_cls = LazyHDF5DatasetWithDepth
+    else:
+        dataset_cls = StandardHDF5Dataset
+
     dataset = dataset_cls(
         file_path=args.h5,
         phase="test",
