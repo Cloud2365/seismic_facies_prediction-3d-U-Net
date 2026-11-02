@@ -15,6 +15,7 @@ data/
 temp_splits/
 *.png
 !docs/figures/*.png
+alaudah_raw/
 # Вся библиотека pytorch-3dunet (чужой код, не загружаем)
 #pytorch-3dunet-master/
 
