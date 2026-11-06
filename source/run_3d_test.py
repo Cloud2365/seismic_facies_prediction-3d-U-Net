@@ -29,7 +29,6 @@ from volume_inference import (
 
 from pytorch3dunet.datasets.hdf5 import (
     StandardHDF5Dataset,
-    LazyHDF5Dataset,
     LazyHDF5DatasetWithDepth,
     LazyHDF5DatasetWithRGT,
 )
@@ -94,8 +93,13 @@ def parse_args():
     parser.add_argument(
         "--absolute_depth",
         action="store_true",
-        help="Deprecated: detected automatically from the config "
-        "(loaders.dataset / model.in_channels). Kept for old command lines.",
+        help="Force the absolute-depth input path (for compatible depth checkpoints).",
+    )
+    parser.add_argument(
+        "--rgt",
+        action="store_true",
+        help="Force the RGT input path. The test H5 must contain raw[0]=seismic "
+        "and raw[1]=RGT, and the config must use NormalizeSeismicRGT.",
     )
     parser.add_argument(
         "--monotonic",
@@ -302,8 +306,12 @@ def print_confusion_matrix(cm, n_classes):
 # ============================================================
 
 
-def test_raw_transforms(val_raw_cfg, use_depth, use_rgt=False):
+def test_raw_transforms(val_raw_cfg, input_mode):
+    """Keep deterministic validation transforms and append ToTensor.
 
+    RGT uses the same paired-channel normalization as during training.
+    Depth and RGT are deliberately handled as separate input modes.
+    """
     allowed = {
         "Normalize",
         "Standardize",
@@ -311,48 +319,23 @@ def test_raw_transforms(val_raw_cfg, use_depth, use_rgt=False):
         "NormalizeSeismicRGT",
         "ToTensor",
     }
-
-    transforms = [
-        dict(t)
-        for t in val_raw_cfg
-        if t.get("name") in allowed
-    ]
-
+    transforms = [dict(t) for t in val_raw_cfg if t.get("name") in allowed]
     names = {t["name"] for t in transforms}
 
-    has_normalization = bool(
-        names
-        & {
-            "Normalize",
-            "Standardize",
-            "PercentileNormalizer",
-            "NormalizeSeismicRGT",
-        }
-    )
-
-    # Старые одноканальные конфиги без нормализации.
-    if (
-        not use_depth
-        and not use_rgt
-        and not has_normalization
-    ):
-        transforms.insert(
-            0,
-            {"name": "Normalize"},
+    if input_mode == "rgt" and "NormalizeSeismicRGT" not in names:
+        raise ValueError(
+            "RGT mode requires NormalizeSeismicRGT in loaders.val.transformer.raw. "
+            "Use the same normalization as in the RGT training config."
         )
 
-    transforms = [
-        t for t in transforms
-        if t["name"] != "ToTensor"
-    ]
+    transforms = [t for t in transforms if t["name"] != "ToTensor"]
+    if input_mode == "seismic" and not (
+        {"Normalize", "Standardize", "PercentileNormalizer"} & names
+    ):
+        # Preserve the legacy one-channel test behavior.
+        transforms.insert(0, {"name": "Normalize"})
 
-    transforms.append(
-        {
-            "name": "ToTensor",
-            "expand_dims": True,
-        }
-    )
-
+    transforms.append({"name": "ToTensor", "expand_dims": True})
     return transforms
 
 
@@ -487,73 +470,56 @@ def main():
 
     loaders_cfg = config["loaders"]
     val_cfg = loaders_cfg["val"]
-    
-    patch_shape = tuple(
-        val_cfg["slice_builder"]["patch_shape"]
-    )
-
-    stride_shape = tuple(
-        val_cfg["slice_builder"]["stride_shape"]
-    )
-
+    patch_shape = tuple(val_cfg["slice_builder"]["patch_shape"])
+    stride_shape = tuple(val_cfg["slice_builder"]["stride_shape"])
     dataset_name = loaders_cfg.get("dataset")
-    experiment = config.get("experiment", {})
+    experiment_cfg = config.get("experiment", {})
 
-    # Определяем тип второго канала по конфигурации,
-    # а не просто по числу входных каналов.
+    # A two-channel model alone cannot distinguish RGT from absolute depth.
     use_rgt = (
-        dataset_name == "LazyHDF5DatasetWithRGT"
-        or bool(experiment.get("rgt", False))
+        args.rgt
+        or bool(experiment_cfg.get("rgt", False))
+        or dataset_name == "LazyHDF5DatasetWithRGT"
     )
-
     use_depth = (
-        dataset_name == "LazyHDF5DatasetWithDepth"
-        or bool(experiment.get("absolute_depth", False))
+        args.absolute_depth
+        or bool(experiment_cfg.get("absolute_depth", False))
+        or dataset_name == "LazyHDF5DatasetWithDepth"
     )
 
     if use_rgt and use_depth:
         raise ValueError(
-            "Конфиг не может одновременно описывать "
-            "RGT и absolute depth."
+            "Both RGT and absolute depth are selected. "
+            "These input modes must be tested separately."
         )
 
-    if args.absolute_depth and not use_depth:
+    if use_rgt:
+        input_mode = "rgt"
+        expected_channels = 2
+        dataset_cls = LazyHDF5DatasetWithRGT
+    elif use_depth:
+        input_mode = "depth"
+        expected_channels = 2
+        dataset_cls = LazyHDF5DatasetWithDepth
+    else:
+        input_mode = "seismic"
+        expected_channels = 1
+        dataset_cls = StandardHDF5Dataset
+
+    configured_channels = int(config["model"].get("in_channels", expected_channels))
+    if configured_channels != expected_channels:
         raise ValueError(
-            "--absolute_depth задан, "
-            "но конфиг не описывает абсолютную глубину."
-        )
-
-    input_channels = int(
-        config["model"].get("in_channels", 1)
-    )
-
-    expected_channels = (
-        2 if (use_rgt or use_depth) else 1
-    )
-
-    if input_channels != expected_channels:
-        raise ValueError(
-            f"Модель ожидает {input_channels} каналов, "
-            f"а загрузчик должен предоставить {expected_channels}."
+            f"Input mode '{input_mode}' expects {expected_channels} model channel(s), "
+            f"but config model.in_channels={configured_channels}."
         )
 
     raw_transforms = test_raw_transforms(
-        val_cfg["transformer"]["raw"],
-        use_depth,
-        use_rgt,
+        val_cfg["transformer"]["raw"], input_mode
     )
-
     transformer_config = {
         "raw": raw_transforms,
-        "label": [
-            {
-                "name": "ToTensor",
-                "dtype": "long",
-                "expand_dims": False,
-            }
-        ],
+        "label": [{"name": "ToTensor", "dtype": "long", "expand_dims": False}],
     }
-
     slice_builder_config = {
         "name": "SliceBuilder",
         "ndim": 3,
@@ -563,16 +529,24 @@ def main():
 
     print(f"Patch shape : {patch_shape}")
     print(f"Stride      : {stride_shape}")
+    print(f"Input mode  : {input_mode}")
     print(f"RGT input   : {use_rgt}")
     print(f"Depth input : {use_depth}")
     print(f"Raw transforms: {raw_transforms}")
 
-    if use_rgt:
-        dataset_cls = LazyHDF5DatasetWithRGT
-    elif use_depth:
-        dataset_cls = LazyHDF5DatasetWithDepth
-    else:
-        dataset_cls = StandardHDF5Dataset
+    with h5py.File(args.h5, "r") as f:
+        raw_shape = tuple(f["raw"].shape)
+    if input_mode in {"rgt", "depth"}:
+        if len(raw_shape) != 4 or raw_shape[0] != 2:
+            raise RuntimeError(
+                f"{input_mode} test H5 must have raw shape "
+                "[2, crossline, depth, inline]; got " + str(raw_shape)
+            )
+    elif len(raw_shape) != 3:
+        raise RuntimeError(
+            "Seismic-only test H5 must have raw shape "
+            "[crossline, depth, inline]; got " + str(raw_shape)
+        )
 
     dataset = dataset_cls(
         file_path=args.h5,
@@ -624,7 +598,7 @@ def main():
     print("=" * 80)
     # border 4 as before, reduced for thin patches (the stats need 2*border < min patch size)
     boundary_border = max(1, min(4, (min(patch_shape) - 1) // 2))
-    boundary_stats = PatchBoundaryStats(n_classes=args.n_classes, border=boundary_border)
+    boundary_stats = PatchBoundaryStats(n_classes=args.n_classes, border=boundary_border, focus=tuple(range(args.n_classes)))
 
     with h5py.File(args.h5, "r") as test_h5, torch.no_grad():
         label_volume = np.asarray(test_h5["label"][:])
@@ -795,6 +769,8 @@ def main():
     print(f"Mean IoU (without class 0)  : " f"{mean_iou_no_background:.5f}")
 
     print(f"Mean IoU (with class 0)     : " f"{mean_iou_with_background:.5f}")
+    print(f"Frequency Weighted IoU: "f"{metrics['frequency_weighted_iou']:.5f}"
+)
 
     if argmax_metrics is not None:
         print()
@@ -804,12 +780,17 @@ def main():
             f"{argmax_metrics['mean_iou_no_background']:.5f}, "
             f"pixel accuracy: {argmax_metrics['pixel_accuracy']:.5f}"
         )
+        print(
+        "Plain argmax FWIoU: "
+        f"{argmax_metrics['frequency_weighted_iou']:.5f}"
+        )
 
     print()
     print(
         f"{'Class':>8}"
         f"{'Accuracy':>14}"
         f"{'IoU':>14}"
+        f"{'FWIoU contrib.':>16}"
         f"{'Precision':>14}"
         f"{'Recall':>14}"
         f"{'F1':>14}"
@@ -827,6 +808,7 @@ def main():
         class_metrics = {
             "accuracy": per_class["accuracy"][class_id],
             "iou": per_class["iou"][class_id],
+            "frequency_weighted_iou": per_class["frequency_weighted_iou"][class_id],
             "precision": per_class["precision"][class_id],
             "recall": per_class["recall"][class_id],
             "f1": per_class["f1"][class_id],
@@ -837,6 +819,7 @@ def main():
             f"{class_id:>8}"
             f"{class_metrics['accuracy']:>14.4f}"
             f"{class_metrics['iou']:>14.4f}"
+            f"{class_metrics['frequency_weighted_iou']:>16.4f}"
             f"{class_metrics['precision']:>14.4f}"
             f"{class_metrics['recall']:>14.4f}"
             f"{class_metrics['f1']:>14.4f}"
@@ -892,6 +875,7 @@ def main():
                 "recall": per_class["recall"][class_id],
                 "f1": per_class["f1"][class_id],
                 "pixels": per_class["support"][class_id],
+                "frequency_weighted_iou": per_class["frequency_weighted_iou"][class_id],
             }
         )
 
@@ -903,7 +887,8 @@ def main():
         {
             "class": "Mean",
             "accuracy": mean_class_accuracy,
-            "iou": mean_iou_no_background,
+            "iou": mean_iou_with_background,
+            "frequency_weighted_iou": metrics["frequency_weighted_iou"],
             "precision": np.mean(
                 [per_class["precision"][class_id] for class_id in range(args.n_classes)]
             ),
