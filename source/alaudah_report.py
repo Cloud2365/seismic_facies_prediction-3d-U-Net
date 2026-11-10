@@ -34,17 +34,17 @@ N_CLASSES = 6
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Create a multi-page Alaudah 3D U-Net HTML report")
-    parser.add_argument("--test1_dir", type=Path, default=Path("./test_logs/alaudah/test1"))
-    parser.add_argument("--test2_dir", type=Path, default=Path("./test_logs/alaudah/test2"))
-    parser.add_argument("--combined_dir", type=Path, default=Path("./test_logs/alaudah/combined"),
+    parser.add_argument("--test1_dir", type=Path, default=Path("./test_logs/alaudah_rgt_vstretch_monotonic/test1"))
+    parser.add_argument("--test2_dir", type=Path, default=Path("./test_logs/alaudah_rgt_vstretch_monotonic/test2"))
+    parser.add_argument("--combined_dir", type=Path, default=Path("./test_logs/alaudah_vstretch_monotonic/combined"),
                         help="Folder where pooled combined CSV files will be saved")
-    parser.add_argument("--train_loss_csv", type=Path, default=Path("./train_logs/alaudah/train_loss.csv"))
-    parser.add_argument("--val_loss_csv", type=Path, default=Path("./train_logs/alaudah/val_loss.csv"))
-    parser.add_argument("--train_h5", type=Path, default=Path("../pytorch-3dunet-master/my_data/benchmark/train.h5"))
-    parser.add_argument("--val_h5", type=Path, default=Path("../pytorch-3dunet-master/my_data/benchmark/val.h5"))
-    parser.add_argument("--test1_h5", type=Path, default=Path("../pytorch-3dunet-master/my_data/benchmark/test1.h5"))
-    parser.add_argument("--test2_h5", type=Path, default=Path("../pytorch-3dunet-master/my_data/benchmark/test2.h5"))
-    parser.add_argument("--output_dir", type=Path, default=Path("./test_logs/alaudah/test_result"))
+    parser.add_argument("--train_loss_csv", type=Path, default=Path("./train_logs/alaudah_rgt/train_loss.csv"))
+    parser.add_argument("--val_loss_csv", type=Path, default=Path("./train_logs/alaudah_rgt/val_loss.csv"))
+    parser.add_argument("--train_h5", type=Path, default=Path("../pytorch-3dunet-master/my_data/benchmark_rgt/train.h5"))
+    parser.add_argument("--val_h5", type=Path, default=Path("../pytorch-3dunet-master/my_data/benchmark_rgt/val.h5"))
+    parser.add_argument("--test1_h5", type=Path, default=Path("../pytorch-3dunet-master/my_data/benchmark_rgt/test1.h5"))
+    parser.add_argument("--test2_h5", type=Path, default=Path("../pytorch-3dunet-master/my_data/benchmark_rgt/test2.h5"))
+    parser.add_argument("--output_dir", type=Path, default=Path("./test_logs/alaudah_rgt_vstretch_monotonic/test_result"))
     parser.add_argument("--max_visual_patches", type=int, default=16)
     return parser.parse_args()
 
@@ -187,7 +187,6 @@ def metrics_from_cm(cm: np.ndarray) -> tuple[dict[str, float], pd.DataFrame]:
         "pixel_accuracy": float(tp.sum() / total) if total else float("nan"),
         "mean_class_accuracy": float(np.nanmean(recall)) if np.isfinite(recall).any() else float("nan"),
         "mean_iou_all_classes": float(np.nanmean(iou)) if np.isfinite(iou).any() else float("nan"),
-        "mean_iou_classes_1_5": float(np.nanmean(iou[1:])) if np.isfinite(iou[1:]).any() else float("nan"),
         "frequency_weighted_iou": float(fwiou_contribution.sum()),
         "evaluated_voxels": total,
     }
@@ -449,7 +448,6 @@ def summary_comparison_table(summaries: dict[str, dict[str, float]]) -> str:
         ("Pixel Accuracy", "pixel_accuracy"),
         ("Mean Class Accuracy", "mean_class_accuracy"),
         ("Mean IoU — все 6 классов", "mean_iou_all_classes"),
-        ("Mean IoU — классы 1–5", "mean_iou_classes_1_5"),
         ("Frequency Weighted IoU", "frequency_weighted_iou"),
         ("Количество вокселей", "evaluated_voxels"),
     ]
