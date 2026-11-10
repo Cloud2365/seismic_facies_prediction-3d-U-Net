@@ -23,9 +23,10 @@ alaudah_raw/
 *.csv
 *.npz
 *.xyz
-# Вся библиотека pytorch-3dunet (чужой код, не загружаем)
+# Вся библиотека pytorch-3dunet и mhe (чужой код, не загружаем)
 #pytorch-3dunet-master/
-
+source/paper_rgt/classes/mhe
+source/paper_rgt/classes/
 # Графики и визуализации
 source/train_logs/
 source/spatial_shift_diagnostics/
